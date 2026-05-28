@@ -36,12 +36,35 @@ async function fetchJson<T>(url: string, timeout: number, options?: RequestInit)
   }
 }
 
+async function fetchJsonWithStatus<T>(url: string, timeout: number, options?: RequestInit): Promise<{ data: T | null, status: number }> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeout)
+
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+
+    clearTimeout(timer)
+
+    if (!res.ok) return { data: null, status: res.status }
+    return { data: (await res.json()) as T, status: res.status }
+  } catch {
+    return { data: null, status: 0 }
+  }
+}
+
 export async function discoverModels(config: PluginConfig, token: string): Promise<Record<string, LiteLLMModelInfo>> {
-  const healthRes = await fetchJson<LiteLLMHealthResponse>(
+  const { data: healthRes, status } = await fetchJsonWithStatus<LiteLLMHealthResponse>(
     `${config.url}/health`,
     DISCOVERY_TIMEOUT,
     { headers: { 'Authorization': `Bearer ${token}` } }
   )
+
+  if (status === 403) {
+    throw new Error('Access denied (403). Check your LiteLLM API key or contact your admin.')
+  }
 
   if (!healthRes || !healthRes.healthy_endpoints?.length) return {}
 
@@ -231,8 +254,12 @@ export async function fetchSkillContent(skill: Skill): Promise<string | null> {
 
   if (!rawUrl) return null
 
-  // 2 retries on 429/5xx
+  // 2 retries on 429/5xx with exponential backoff
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      const backoff = Math.min(500 * 2 ** (attempt - 1), 1000)
+      await new Promise(r => setTimeout(r, backoff))
+    }
     try {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), SKILL_FETCH_TIMEOUT)

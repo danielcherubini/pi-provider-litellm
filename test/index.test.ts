@@ -82,10 +82,10 @@ describe('extension entry point', () => {
     expect(mockPi.unregisterProvider.mock.calls[unregisterCallIndex]).toBeDefined()
   })
 
-  it('registers tools even when model discovery fails', async () => {
+  it('registers tools even when model discovery fails with 403', async () => {
     vi.doMock('../src/litellm-api.js', () => ({
       resolvePluginConfig: () => mockConfig,
-      discoverModels: vi.fn().mockRejectedValue(new Error('auth failed')),
+      discoverModels: vi.fn().mockRejectedValue(new Error('Access denied (403). Check your LiteLLM API key or contact your admin.')),
       discoverMcpTools: vi.fn().mockResolvedValue([]),
       listSkills: vi.fn().mockResolvedValue([]),
       buildProviderConfig: vi.fn(),

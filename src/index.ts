@@ -1,7 +1,7 @@
 import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult } from '@earendil-works/pi-coding-agent'
 import { resolvePluginConfig, discoverModels, discoverMcpTools, listSkills, buildProviderConfig } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions, createSkillsInjector } from './tools.js'
-import type { PluginConfig } from './types.js'
+import type { LiteLLMModelInfo, McpTool, PluginConfig } from './types.js'
 
 const PROVIDER_NAME = 'litellm'
 
@@ -40,11 +40,36 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig): Promise<void> {
   pi.unregisterProvider(PROVIDER_NAME)
 
-  const [modelsResult, mcpResult, skillsResult] = await Promise.allSettled([
-    discoverModels(config, config.apiKey),
-    discoverMcpTools(config, config.apiKey),
-    listSkills(config, config.apiKey),
-  ])
+  const DISCOVERY_TIMEOUT_MS = 30_000
+
+  let modelsResult: PromiseSettledResult<Record<string, LiteLLMModelInfo>>
+  let mcpResult: PromiseSettledResult<McpTool[]>
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Discovery timeout')), DISCOVERY_TIMEOUT_MS)
+  })
+
+  try {
+    const results = await Promise.race([
+      Promise.allSettled([
+        discoverModels(config, config.apiKey),
+        discoverMcpTools(config, config.apiKey),
+        listSkills(config, config.apiKey),
+      ]),
+      timeoutPromise,
+    ])
+    const settledResults = results as [
+      PromiseSettledResult<Record<string, LiteLLMModelInfo>>,
+      PromiseSettledResult<McpTool[]>,
+      PromiseSettledResult<unknown>,
+    ]
+    modelsResult = settledResults[0]
+    mcpResult = settledResults[1]
+  } catch (error) {
+    console.warn(`[pi-provider-litellm] Discovery failed: ${error}`)
+    modelsResult = { status: 'rejected', reason: error as Error }
+    mcpResult = { status: 'rejected', reason: error as Error }
+  }
 
   if (modelsResult.status === 'fulfilled' && Object.keys(modelsResult.value).length > 0) {
     const providerConfig = buildProviderConfig(config.url, config.apiKey, modelsResult.value)
