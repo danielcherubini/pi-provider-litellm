@@ -3,16 +3,16 @@
 ## Quick Stats
 
 - **Total Plans:** 1
-- **In Progress:** 1
-- **Completed:** 0
+- **In Progress:** 0
+- **Completed:** 1
 
 ---
 
-## Active Plans
+## Completed Plans
 
 | Plan | Status |
 |------|--------|
-| [2026-05-28: pi-provider-litellm](2026-05-28-pi-provider-litellm.md) | 🚧 IN PROGRESS |
+| [2026-05-28: pi-provider-litellm](2026-05-28-pi-provider-litellm.md) | ✅ COMPLETED |
 
 ---
 

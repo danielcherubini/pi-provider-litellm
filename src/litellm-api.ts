@@ -91,12 +91,13 @@ export async function discoverModels(config: PluginConfig, token: string): Promi
 }
 
 export async function discoverMcpTools(config: PluginConfig, token: string): Promise<McpTool[]> {
-  const res = await fetchJson<McpTool[]>(
+  const res = await fetchJson<unknown>(
     `${config.url}/mcp-rest/tools/list`,
     DISCOVERY_TIMEOUT,
     { headers: { 'Authorization': `Bearer ${token}` } }
   )
-  return res || []
+  if (!Array.isArray(res)) return []
+  return res as McpTool[]
 }
 
 export async function executeMcpTool(
