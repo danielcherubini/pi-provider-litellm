@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mapToProviderModel, resolvePluginConfig, fetchSkillContent } from '../src/litellm-api.js'
+import { mapToProviderModel, resolvePluginConfig, fetchSkillContent, buildProviderConfig } from '../src/litellm-api.js'
 import type { LiteLLMModelInfo, Skill } from '../src/types.js'
 
 describe('mapToProviderModel', () => {
@@ -111,5 +111,125 @@ describe('resolvePluginConfig', () => {
 
     const result = resolvePluginConfig()
     expect(result).toBeNull()
+  })
+
+  it('prefers env vars over settings.json', () => {
+    process.env.LITELLM_URL = 'https://from-env.example.com'
+    process.env.LITELLM_KEY = 'env-key'
+
+    const result = resolvePluginConfig()
+    expect(result).toEqual({
+      url: 'https://from-env.example.com',
+      apiKey: 'env-key',
+    })
+  })
+})
+
+describe('buildProviderConfig', () => {
+  it('maps models and sets api to openai-completions', () => {
+    const models = {
+      'gpt-4': { model_name: 'gpt-4', max_tokens: 8192, supports_reasoning: true },
+    }
+    const config = buildProviderConfig('https://litellm.example.com', 'sk-test', models)
+
+    expect(config.api).toBe('openai-completions')
+    expect(config.baseUrl).toBe('https://litellm.example.com')
+    expect(config.apiKey).toBe('sk-test')
+    expect(config.models).toHaveLength(1)
+    expect(config.models![0].id).toBe('gpt-4')
+    expect(config.models![0].reasoning).toBe(true)
+  })
+
+  it('handles empty models map', () => {
+    const config = buildProviderConfig('https://litellm.example.com', 'sk-test', {})
+    expect(config.models).toHaveLength(0)
+  })
+})
+
+describe('fetchSkillContent', () => {
+  it('returns null for non-GitHub URLs', async () => {
+    const skill: Skill = {
+      id: 'test',
+      name: 'test',
+      version: '1.0.0',
+      description: null,
+      source: { source: 'git-subdir', url: 'https://gitlab.com/owner/repo.git' },
+      author: null,
+      homepage: null,
+      keywords: null,
+      category: null,
+      domain: null,
+      namespace: null,
+      enabled: true,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    }
+
+    const result = await fetchSkillContent(skill)
+    expect(result).toBeNull()
+  })
+
+  it('returns null for GitHub URL with no path', async () => {
+    const skill: Skill = {
+      id: 'test',
+      name: 'test',
+      version: '1.0.0',
+      description: null,
+      source: { source: 'git-subdir', url: 'https://github.com/owner/repo.git' },
+      author: null,
+      homepage: null,
+      keywords: null,
+      category: null,
+      domain: null,
+      namespace: null,
+      enabled: true,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    }
+
+    const globalFetch = globalThis.fetch
+    const mockFetch = vi.fn()
+    globalThis.fetch = mockFetch as unknown as typeof global.fetch
+
+    const result = await fetchSkillContent(skill)
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://raw.githubusercontent.com/owner/repo/main/SKILL.md',
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    globalThis.fetch = globalFetch
+  })
+
+  it('retries on 429 response', async () => {
+    const skill: Skill = {
+      id: 'test',
+      name: 'test',
+      version: '1.0.0',
+      description: null,
+      source: { source: 'git-subdir', url: 'https://github.com/owner/repo.git', path: 's' },
+      author: null,
+      homepage: null,
+      keywords: null,
+      category: null,
+      domain: null,
+      namespace: null,
+      enabled: true,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    }
+
+    const globalFetch = globalThis.fetch
+    let callCount = 0
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return Promise.resolve({ ok: false, status: 429 })
+      return Promise.resolve({ ok: true, text: () => Promise.resolve('content') })
+    }) as unknown as typeof global.fetch
+
+    const result = await fetchSkillContent(skill)
+    expect(result).toBe('content')
+    expect(callCount).toBe(2)
+
+    globalThis.fetch = globalFetch
   })
 })
