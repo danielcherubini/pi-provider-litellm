@@ -1,0 +1,326 @@
+import os from 'node:os'
+import path from 'node:path'
+import fs from 'node:fs'
+import type {
+  LiteLLMHealthModel,
+  LiteLLMHealthResponse,
+  LiteLLMModelInfo,
+  McpTool,
+  Skill,
+  SkillPluginsResponse,
+  PluginConfig,
+  ProviderModelConfig,
+  ProviderConfig,
+} from './types.js'
+
+const DISCOVERY_TIMEOUT = 10_000
+const TOOL_EXEC_TIMEOUT = 30_000
+const SKILL_FETCH_TIMEOUT = 5_000
+
+async function fetchJson<T>(url: string, timeout: number, options?: RequestInit): Promise<T | null> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeout)
+
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+
+    clearTimeout(timer)
+
+    if (!res.ok) return null
+    return (await res.json()) as T
+  } catch {
+    return null
+  }
+}
+
+export async function discoverModels(config: PluginConfig, token: string): Promise<Record<string, LiteLLMModelInfo>> {
+  const healthRes = await fetchJson<LiteLLMHealthResponse>(
+    `${config.url}/health`,
+    DISCOVERY_TIMEOUT,
+    { headers: { 'Authorization': `Bearer ${token}` } }
+  )
+
+  if (!healthRes || !healthRes.healthy_endpoints?.length) return {}
+
+  const infoMap: Record<string, LiteLLMModelInfo> = {}
+
+  const results = await Promise.allSettled(
+    healthRes.healthy_endpoints.map(async (endpoint: LiteLLMHealthModel) => {
+      const info = await fetchJson<LiteLLMModelInfo>(
+        `${config.url}/model/info?litellm_model_id=${encodeURIComponent(endpoint.model_id)}`,
+        DISCOVERY_TIMEOUT,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      )
+      return { endpoint, info }
+    })
+  )
+
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value.info?.model_name) {
+      infoMap[result.value.info.model_name] = result.value.info
+    }
+  }
+
+  return infoMap
+}
+
+export async function discoverMcpTools(config: PluginConfig, token: string): Promise<McpTool[]> {
+  const res = await fetchJson<McpTool[]>(
+    `${config.url}/mcp-rest/tools/list`,
+    DISCOVERY_TIMEOUT,
+    { headers: { 'Authorization': `Bearer ${token}` } }
+  )
+  return res || []
+}
+
+export async function executeMcpTool(
+  config: PluginConfig,
+  token: string,
+  server: string,
+  toolName: string,
+  args: Record<string, unknown>
+): Promise<string> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TOOL_EXEC_TIMEOUT)
+
+    const res = await fetch(`${config.url}/mcp-rest/tools/call`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ server_name: server, tool_name: toolName, arguments: args }),
+      signal: controller.signal,
+    })
+
+    clearTimeout(timer)
+
+    if (!res.ok) {
+      return `Error: HTTP ${res.status} ${res.statusText}`
+    }
+
+    const data = await res.json()
+    return JSON.stringify(data)
+  } catch (err: unknown) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+export async function listSkills(config: PluginConfig, token: string): Promise<Skill[]> {
+  const res = await fetchJson<SkillPluginsResponse>(
+    `${config.url}/claude-code/plugins`,
+    DISCOVERY_TIMEOUT,
+    { headers: { 'Authorization': `Bearer ${token}` } }
+  )
+  return res?.plugins || []
+}
+
+export async function registerSkill(
+  config: PluginConfig,
+  token: string,
+  name: string,
+  gitUrl: string,
+  gitPath: string,
+  description?: string,
+  domain?: string
+): Promise<string> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT)
+
+    const res = await fetch(`${config.url}/claude-code/plugins`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name,
+        git_url: gitUrl,
+        git_path: gitPath,
+        ...(description && { description }),
+        ...(domain && { domain }),
+      }),
+      signal: controller.signal,
+    })
+
+    clearTimeout(timer)
+
+    if (!res.ok) {
+      return `Error: HTTP ${res.status} ${res.statusText}`
+    }
+
+    const data = await res.json()
+    return JSON.stringify(data)
+  } catch (err: unknown) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+export async function enableSkill(config: PluginConfig, token: string, name: string): Promise<string> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT)
+
+    const res = await fetch(`${config.url}/claude-code/plugins/${encodeURIComponent(name)}/enable`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    })
+
+    clearTimeout(timer)
+
+    if (!res.ok) {
+      return `Error: HTTP ${res.status} ${res.statusText}`
+    }
+
+    const data = await res.json()
+    return JSON.stringify(data)
+  } catch (err: unknown) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+export async function disableSkill(config: PluginConfig, token: string, name: string): Promise<string> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT)
+
+    const res = await fetch(`${config.url}/claude-code/plugins/${encodeURIComponent(name)}/disable`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    })
+
+    clearTimeout(timer)
+
+    if (!res.ok) {
+      return `Error: HTTP ${res.status} ${res.statusText}`
+    }
+
+    const data = await res.json()
+    return JSON.stringify(data)
+  } catch (err: unknown) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+export async function fetchSkillContent(skill: Skill): Promise<string | null> {
+  const { source } = skill
+  const { url, path } = source
+
+  // Build GitHub raw URL from git URL
+  let rawUrl: string | null = null
+
+  if (url.includes('github.com')) {
+    const gitMatch = url.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/)
+    if (gitMatch) {
+      const [, owner, repo] = gitMatch
+      const branch = 'main'
+      rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}${path ? '/' + path : ''}/SKILL.md`
+    }
+  }
+
+  if (!rawUrl) return null
+
+  // 2 retries on 429/5xx
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), SKILL_FETCH_TIMEOUT)
+
+      const res = await fetch(rawUrl, { signal: controller.signal })
+      clearTimeout(timer)
+
+      if (res.ok) {
+        return await res.text()
+      }
+
+      // Retry on 429 or 5xx
+      if ((res.status === 429 || res.status >= 500) && attempt < 2) {
+        continue
+      }
+      return null
+    } catch {
+      if (attempt < 2) continue
+      return null
+    }
+  }
+
+  return null
+}
+
+export function resolvePluginConfig(): PluginConfig | null {
+  // Check env vars first
+  const envUrl = process.env.LITELLM_URL
+  const envKey = process.env.LITELLM_KEY
+
+  if (envUrl && envKey) {
+    return { url: envUrl, apiKey: envKey }
+  }
+
+  // Check settings.json
+  try {
+    const settingsPath = path.join(os.homedir(), '.pi', 'agent', 'settings.json')
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
+
+    const providerSettings = settings['pi-provider-litellm'] as Record<string, string> | undefined
+
+    if (providerSettings?.url && providerSettings?.token) {
+      return { url: providerSettings.url, apiKey: providerSettings.token }
+    }
+  } catch {
+    // settings.json not found or invalid
+  }
+
+  return null
+}
+
+export function mapToProviderModel(info: LiteLLMModelInfo): ProviderModelConfig {
+  const input: ('text' | 'image')[] = ['text']
+  if (info.supports_vision) {
+    input.push('image')
+  }
+
+  return {
+    id: info.model_name ?? '',
+    name: info.model_name ?? '',
+    reasoning: info.supports_reasoning ?? false,
+    input,
+    cost: {
+      input: info.input_cost_per_token ? info.input_cost_per_token * 1_000_000 : 0,
+      output: info.output_cost_per_token ? info.output_cost_per_token * 1_000_000 : 0,
+      cacheRead: info.cache_read_input_token_cost ? info.cache_read_input_token_cost * 1_000_000 : 0,
+      cacheWrite: info.cache_creation_input_token_cost ? info.cache_creation_input_token_cost * 1_000_000 : 0,
+    },
+    contextWindow: info.max_input_tokens ?? info.max_tokens ?? 0,
+    maxTokens: info.max_output_tokens ?? info.max_tokens ?? 0,
+    compat: {
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: false,
+    },
+  }
+}
+
+export function buildProviderConfig(
+  url: string,
+  apiKey: string,
+  models: Record<string, LiteLLMModelInfo>
+): ProviderConfig {
+  const mappedModels = Object.values(models).map(mapToProviderModel)
+
+  return {
+    baseUrl: url,
+    apiKey,
+    api: 'openai-completions',
+    models: mappedModels,
+  }
+}
