@@ -7,25 +7,36 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest",
     "test:run": "vitest run"
   },
-  "keywords": ["pi-package", "pi", "pi-agent", "litellm", "extension", "auto-discovery"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-agent",
+    "litellm",
+    "extension",
+    "auto-discovery"
+  ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "devDependencies": {
-    "typescript": "^5.9.0",
-    "vitest": "^4.0.0",
+    "@earendil-works/pi-coding-agent": "*",
     "@types/node": "^22.0.0",
-    "@earendil-works/pi-coding-agent": "*"
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
   },
   "author": "Daniel Cherubini",
   "license": "MIT"

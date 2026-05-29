@@ -6,12 +6,14 @@ import type { LiteLLMModelInfo, McpTool, PluginConfig } from './types.js'
 const PROVIDER_NAME = 'litellm'
 
 export default async function (pi: ExtensionAPI): Promise<void> {
+  console.log('[pi-provider-litellm] Extension loaded, starting discovery...')
   const config = resolvePluginConfig()
   if (!config) {
     console.log('[pi-provider-litellm] No LiteLLM config found. Set LITELLM_URL/LITELLM_KEY or ~/.pi/agent/settings.json')
     return
   }
 
+  console.log(`[pi-provider-litellm] Config resolved: url=${config.url}`)
   await discoverAndRegister(pi, config)
 
   const injector = createSkillsInjector(config, config.apiKey)
