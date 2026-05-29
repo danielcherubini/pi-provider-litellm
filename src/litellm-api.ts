@@ -72,19 +72,47 @@ export async function discoverModels(config: PluginConfig, token: string): Promi
 
   const results = await Promise.allSettled(
     healthRes.healthy_endpoints.map(async (endpoint: LiteLLMHealthModel) => {
-      const info = await fetchJson<LiteLLMModelInfo>(
+      const raw = await fetchJson<unknown>(
         `${config.url}/model/info?litellm_model_id=${encodeURIComponent(endpoint.model_id)}`,
         DISCOVERY_TIMEOUT,
         { headers: { 'Authorization': `Bearer ${token}` } }
       )
-      return { endpoint, info }
+      return { endpoint, raw }
     })
   )
 
   for (const result of results) {
-    if (result.status === 'fulfilled' && result.value.info?.model_name) {
-      infoMap[result.value.info.model_name] = result.value.info
+    if (result.status !== 'fulfilled') continue
+    const { raw } = result.value
+    if (!raw || typeof raw !== 'object') continue
+
+    // /model/info returns { data: [{ model_name, model_info, litellm_params }] }
+    const data = (raw as { data?: unknown[] }).data
+    if (!Array.isArray(data) || !data.length) continue
+    const entry = data[0] as Record<string, unknown>
+
+    const modelName = typeof entry.model_name === 'string' ? entry.model_name : null
+    if (!modelName) continue
+
+    const modelInfo = (entry.model_info ?? {}) as Record<string, unknown>
+    const litellmParams = (entry.litellm_params ?? {}) as Record<string, unknown>
+
+    // Merge model_info and litellm_params into a flat LiteLLMModelInfo
+    const merged: Record<string, unknown> = {
+      model_name: modelName,
+      ...modelInfo,
+      ...litellmParams,
     }
+
+    // Normalize max_tokens if not set from model_info
+    if (!merged.max_input_tokens && merged.max_tokens) {
+      merged.max_input_tokens = merged.max_tokens
+    }
+    if (!merged.max_output_tokens && merged.max_tokens) {
+      merged.max_output_tokens = merged.max_tokens
+    }
+
+    infoMap[modelName] = merged as LiteLLMModelInfo
   }
 
   return infoMap
