@@ -1,29 +1,14 @@
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult } from '@earendil-works/pi-coding-agent'
 import { resolvePluginConfig, discoverModels, discoverMcpTools, listSkills, buildProviderConfig } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions, createSkillsInjector } from './tools.js'
 import type { LiteLLMModelInfo, McpTool, PluginConfig } from './types.js'
 
-const PROVIDER_NAME = 'litellm'
-const LOG_FILE = path.join(os.homedir(), '.pi', 'agent', 'pi-provider-litellm.log')
-
-function log(msg: string) {
-  const line = `[pi-provider-litellm] ${new Date().toISOString()} ${msg}\n`
-  fs.appendFileSync(LOG_FILE, line)
-  console.log(line.trim())
-}
-
 export default async function (pi: ExtensionAPI): Promise<void> {
-  log('Extension loaded, starting discovery...')
   const config = resolvePluginConfig()
   if (!config) {
-    log('No LiteLLM config found. Set LITELLM_URL/LITELLM_KEY or ~/.pi/agent/settings.json')
     return
   }
 
-  log(`Config resolved: url=${config.url}`)
   await discoverAndRegister(pi, config)
 
   const injector = createSkillsInjector(config, config.apiKey)
@@ -50,11 +35,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 }
 
 export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig): Promise<void> {
-  log('discoverAndRegister: starting...')
   try {
-    pi.unregisterProvider(PROVIDER_NAME)
-  } catch (e) {
-    log(`unregisterProvider failed: ${e}`)
+    pi.unregisterProvider(config.providerId)
+  } catch {
+    // Provider not yet registered
   }
 
   const DISCOVERY_TIMEOUT_MS = 30_000
@@ -67,7 +51,6 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
   })
 
   try {
-    log('discoverAndRegister: running discovery...')
     const results = await Promise.race([
       Promise.allSettled([
         discoverModels(config, config.apiKey),
@@ -76,7 +59,6 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
       ]),
       timeoutPromise,
     ])
-    log(`discoverAndRegister: discovery done, modelsResult.status=${results[0].status}`)
     const settledResults = results as [
       PromiseSettledResult<Record<string, LiteLLMModelInfo>>,
       PromiseSettledResult<McpTool[]>,
@@ -85,19 +67,13 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
     modelsResult = settledResults[0]
     mcpResult = settledResults[1]
   } catch (error) {
-    log(`Discovery failed: ${error}`)
     modelsResult = { status: 'rejected', reason: error as Error }
     mcpResult = { status: 'rejected', reason: error as Error }
   }
 
   if (modelsResult.status === 'fulfilled' && Object.keys(modelsResult.value).length > 0) {
     const providerConfig = buildProviderConfig(config.url, config.apiKey, modelsResult.value)
-    pi.registerProvider(PROVIDER_NAME, providerConfig)
-    log(`Registered ${Object.keys(modelsResult.value).length} models`)
-  } else if (modelsResult.status === 'rejected') {
-    log(`Model discovery failed: ${modelsResult.reason}`)
-  } else {
-    log('No models discovered (empty result)')
+    pi.registerProvider(config.providerId, providerConfig)
   }
 
   if (mcpResult.status === 'fulfilled') {
@@ -105,16 +81,10 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
     for (const tool of mcpTools) {
       pi.registerTool(tool)
     }
-    if (mcpTools.length > 0) {
-      log(`Registered ${mcpTools.length} MCP tools`)
-    }
-  } else {
-    log(`MCP tool discovery failed: ${mcpResult.reason}`)
   }
 
   const skillTools = createSkillToolDefinitions(config, config.apiKey)
   for (const tool of skillTools) {
     pi.registerTool(tool)
   }
-  log(`Registered ${skillTools.length} skill tools`)
 }

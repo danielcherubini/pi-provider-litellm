@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult, ExtensionContext, ProviderConfig, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { PluginConfig } from '../src/types.js'
 
-const mockConfig: PluginConfig = { url: 'http://localhost:4000', apiKey: 'test-key' }
+const mockConfig: PluginConfig = { url: 'http://localhost:4000', apiKey: 'test-key', providerId: 'litellm' }
 
 function createMockPi(): MockPi {
   const handlers: Record<string, Function[]> = {}

@@ -86,77 +86,7 @@ describe('fetchSkillContent', () => {
 
     globalThis.fetch = globalFetch
   })
-})
 
-describe('resolvePluginConfig', () => {
-  const originalEnv = process.env
-
-  beforeEach(() => {
-    process.env = { ...originalEnv }
-  })
-
-  it('returns config when env vars are set', () => {
-    process.env.LITELLM_URL = 'https://litellm.example.com'
-    process.env.LITELLM_KEY = 'sk-test123'
-
-    const result = resolvePluginConfig()
-    expect(result).toEqual({
-      url: 'https://litellm.example.com',
-      apiKey: 'sk-test123',
-    })
-  })
-
-  it('returns null when no config available', () => {
-    const savedUrl = process.env.LITELLM_URL
-    const savedKey = process.env.LITELLM_KEY
-    delete process.env.LITELLM_URL
-    delete process.env.LITELLM_KEY
-
-    // Note: settings.json may still have config, so this tests the fallback path.
-    // If settings.json has pi-provider-litellm config, it will return that.
-    // If not, it returns null.
-    const result = resolvePluginConfig()
-    // Accept either null (no settings) or the settings.json config
-    expect(result === null || (result && typeof result.url === 'string')).toBe(true)
-
-    if (savedUrl) process.env.LITELLM_URL = savedUrl
-    if (savedKey) process.env.LITELLM_KEY = savedKey
-  })
-
-  it('prefers env vars over settings.json', () => {
-    process.env.LITELLM_URL = 'https://from-env.example.com'
-    process.env.LITELLM_KEY = 'env-key'
-
-    const result = resolvePluginConfig()
-    expect(result).toEqual({
-      url: 'https://from-env.example.com',
-      apiKey: 'env-key',
-    })
-  })
-})
-
-describe('buildProviderConfig', () => {
-  it('maps models and sets api to openai-completions', () => {
-    const models = {
-      'gpt-4': { model_name: 'gpt-4', max_tokens: 8192, supports_reasoning: true },
-    }
-    const config = buildProviderConfig('https://litellm.example.com', 'sk-test', models)
-
-    expect(config.api).toBe('openai-completions')
-    expect(config.baseUrl).toBe('https://litellm.example.com')
-    expect(config.apiKey).toBe('sk-test')
-    expect(config.models).toHaveLength(1)
-    expect(config.models![0].id).toBe('gpt-4')
-    expect(config.models![0].reasoning).toBe(true)
-  })
-
-  it('handles empty models map', () => {
-    const config = buildProviderConfig('https://litellm.example.com', 'sk-test', {})
-    expect(config.models).toHaveLength(0)
-  })
-})
-
-describe('fetchSkillContent', () => {
   it('returns null for non-GitHub URLs', async () => {
     const skill: Skill = {
       id: 'test',
@@ -241,5 +171,81 @@ describe('fetchSkillContent', () => {
     expect(callCount).toBe(2)
 
     globalThis.fetch = globalFetch
+  })
+})
+
+describe('resolvePluginConfig', () => {
+  const originalEnv = process.env
+
+  beforeEach(() => {
+    process.env = { ...originalEnv }
+  })
+
+  afterEach(() => {
+    process.env = originalEnv
+  })
+
+  it('returns config when env vars are set', () => {
+    process.env.LITELLM_URL = 'https://litellm.example.com'
+    process.env.LITELLM_KEY = 'sk-test123'
+    delete process.env.LITELLM_PROVIDER_ID
+
+    const result = resolvePluginConfig()
+    expect(result).toEqual({
+      url: 'https://litellm.example.com',
+      apiKey: 'sk-test123',
+      providerId: 'litellm',
+    })
+  })
+
+  it('returns null when no config available', () => {
+    const savedUrl = process.env.LITELLM_URL
+    const savedKey = process.env.LITELLM_KEY
+    delete process.env.LITELLM_URL
+    delete process.env.LITELLM_KEY
+
+    // Note: settings.json may still have config, so this tests the fallback path.
+    // If settings.json has pi-provider-litellm config, it will return that.
+    // If not, it returns null.
+    const result = resolvePluginConfig()
+    // Accept either null (no settings) or the settings.json config
+    expect(result === null || (result && typeof result.url === 'string')).toBe(true)
+
+    if (savedUrl) process.env.LITELLM_URL = savedUrl
+    if (savedKey) process.env.LITELLM_KEY = savedKey
+  })
+
+  it('prefers env vars over settings.json', () => {
+    process.env.LITELLM_URL = 'https://from-env.example.com'
+    process.env.LITELLM_KEY = 'env-key'
+    process.env.LITELLM_PROVIDER_ID = 'custom-provider'
+
+    const result = resolvePluginConfig()
+    expect(result).toEqual({
+      url: 'https://from-env.example.com',
+      apiKey: 'env-key',
+      providerId: 'custom-provider',
+    })
+  })
+})
+
+describe('buildProviderConfig', () => {
+  it('maps models and sets api to openai-completions', () => {
+    const models = {
+      'gpt-4': { model_name: 'gpt-4', max_tokens: 8192, supports_reasoning: true },
+    }
+    const config = buildProviderConfig('https://litellm.example.com', 'sk-test', models)
+
+    expect(config.api).toBe('openai-completions')
+    expect(config.baseUrl).toBe('https://litellm.example.com')
+    expect(config.apiKey).toBe('sk-test')
+    expect(config.models).toHaveLength(1)
+    expect(config.models![0].id).toBe('gpt-4')
+    expect(config.models![0].reasoning).toBe(true)
+  })
+
+  it('handles empty models map', () => {
+    const config = buildProviderConfig('https://litellm.example.com', 'sk-test', {})
+    expect(config.models).toHaveLength(0)
   })
 })

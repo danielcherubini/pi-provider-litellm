@@ -9,7 +9,7 @@ import {
 } from '../src/tools.js'
 import type { McpTool, PluginConfig } from '../src/types.js'
 
-const mockConfig: PluginConfig = { url: 'http://localhost:4000', apiKey: 'test-key' }
+const mockConfig: PluginConfig = { url: 'http://localhost:4000', apiKey: 'test-key', providerId: 'litellm' }
 const mockToken = 'test-token'
 
 describe('sanitizeName', () => {

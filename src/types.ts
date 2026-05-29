@@ -69,4 +69,5 @@ export interface SkillPluginsResponse {
 export interface PluginConfig {
   url: string
   apiKey: string
+  providerId: string
 }

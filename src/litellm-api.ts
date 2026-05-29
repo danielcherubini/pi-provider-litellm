@@ -320,7 +320,7 @@ export function resolvePluginConfig(): PluginConfig | null {
   const envKey = process.env.LITELLM_KEY
 
   if (envUrl && envKey) {
-    return { url: envUrl, apiKey: envKey }
+    return { url: envUrl, apiKey: envKey, providerId: process.env.LITELLM_PROVIDER_ID ?? 'litellm' }
   }
 
   // Check settings.json
@@ -331,7 +331,7 @@ export function resolvePluginConfig(): PluginConfig | null {
     const providerSettings = settings['pi-provider-litellm'] as Record<string, string> | undefined
 
     if (providerSettings?.url && providerSettings?.token) {
-      return { url: providerSettings.url, apiKey: providerSettings.token }
+      return { url: providerSettings.url, apiKey: providerSettings.token, providerId: providerSettings.providerId ?? 'litellm' }
     }
   } catch {
     // settings.json not found or invalid
