@@ -18,10 +18,10 @@ All discovery runs in parallel with a 30s timeout. Each step fails gracefully â€
 
 ```bash
 # From npm (once published)
-pi install npm:pi-provider-litellm
+pi install npm:@danmademe/pi-provider-litellm
 
 # From local path
-pi install ~/Coding/Protector/AI/pi-provider-litellm
+pi install npm:@danmademe/pi-provider-litellm
 ```
 
 ## Configuration
