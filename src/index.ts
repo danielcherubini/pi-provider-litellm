@@ -55,11 +55,15 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 }
 
 export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig, getToken: () => Promise<string>): Promise<void> {
-  // Register from cache immediately so models are visible before live discovery
-  // completes. On first-ever run there is no cache, so this is a no-op.
+  // Register from cache before live discovery so models are visible immediately.
+  // Must await getToken() — PI rejects an empty apiKey. In gcloud mode this is
+  // one OAuth exchange (~500ms), but subsequent starts within the 50-min TTL
+  // return the cached token instantly. On first-ever run there is no cache file,
+  // so this block is skipped entirely.
   const cached = loadModelCache(config.providerId)
   if (cached) {
-    pi.registerProvider(config.providerId, buildProviderConfig(config.url, config.apiKey, cached))
+    const token = await getToken()
+    pi.registerProvider(config.providerId, buildProviderConfig(config.url, token, cached))
   }
 
   const DISCOVERY_TIMEOUT_MS = 30_000
