@@ -26,13 +26,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     return config.apiKey
   }
 
-  console.log(`${LOG} Starting — provider: ${config.providerId}, url: ${config.url}, gcloudAuth: ${isGcloudAuth}`)
-
   // Pre-warm the gcloud token immediately so it's cached before discovery starts
-  if (isGcloudAuth) {
-    console.log(`${LOG} Pre-warming gcloud token...`)
-    warmGcloudToken()
-  }
+  if (isGcloudAuth) warmGcloudToken()
 
   // Register from cache immediately so models are available on first load
   const cached = loadModelCache(config.providerId)
@@ -40,7 +35,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     const token = await getToken()
     const providerConfig = buildProviderConfig(config.url, token, cached)
     pi.registerProvider(config.providerId, providerConfig)
-    console.log(`${LOG} Provider "${config.providerId}" registered from cache`)
   }
 
   // Fire-and-forget discovery — refreshes cache and re-registers with live data
@@ -59,7 +53,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   })
 
   pi.on('session_start', async (_event, _ctx) => {
-    console.log(`${LOG} session_start — re-running discovery`)
     setupCompleteSessions.clear()
     injector.clearCache()
     await discoverAndRegister(pi, config, getToken)
@@ -78,8 +71,6 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
   }
 
   const DISCOVERY_TIMEOUT_MS = 30_000
-  const start = Date.now()
-  console.log(`${LOG} Discovery starting...`)
 
   let modelsResult: PromiseSettledResult<Record<string, LiteLLMModelInfo>>
   let mcpResult: PromiseSettledResult<McpTool[]>
@@ -106,7 +97,6 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
     modelsResult = settledResults[0]
     mcpResult = settledResults[1]
   } catch (error) {
-    console.error(`${LOG} Discovery failed: ${error}`)
     modelsResult = { status: 'rejected', reason: error as Error }
     mcpResult = { status: 'rejected', reason: error as Error }
   }
@@ -114,14 +104,12 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
   if (modelsResult.status === 'fulfilled') {
     const modelCount = Object.keys(modelsResult.value).length
     if (modelCount > 0) {
-      console.log(`${LOG} Discovered ${modelCount} models in ${Date.now() - start}ms: ${Object.keys(modelsResult.value).join(', ')}`)
       saveModelCache(config.providerId, modelsResult.value)
       const token = await getToken()
       const providerConfig = buildProviderConfig(config.url, token, modelsResult.value)
       pi.registerProvider(config.providerId, providerConfig)
-      console.log(`${LOG} Provider "${config.providerId}" registered`)
     } else {
-      console.warn(`${LOG} No models discovered (${Date.now() - start}ms) — check LiteLLM /health endpoint`)
+      console.warn(`${LOG} No models discovered — check LiteLLM /health endpoint`)
     }
   } else {
     console.error(`${LOG} Model discovery error: ${modelsResult.reason}`)
@@ -132,7 +120,6 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
     for (const tool of mcpTools) {
       pi.registerTool(tool)
     }
-    console.log(`${LOG} Registered ${mcpTools.length} MCP tool(s)`)
   } else {
     console.warn(`${LOG} MCP tool discovery failed: ${mcpResult.reason}`)
   }
@@ -141,5 +128,4 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
   for (const tool of skillTools) {
     pi.registerTool(tool)
   }
-  console.log(`${LOG} Registered ${skillTools.length} skill tool(s)`)
 }

@@ -3,7 +3,6 @@ import path from 'node:path'
 import fs from 'node:fs'
 import type { LiteLLMModelInfo } from './types.js'
 
-const LOG = '[pi-provider-litellm]'
 const CACHE_FILENAME = 'pi-provider-litellm-cache.json'
 
 interface ModelCache {
@@ -29,9 +28,6 @@ export function loadModelCache(providerId: string): Record<string, LiteLLMModelI
     if (cache.providerId !== providerId) return null
     if (!cache.models || typeof cache.models !== 'object') return null
 
-    const ageMs = Date.now() - (cache.savedAt ?? 0)
-    const ageMins = Math.round(ageMs / 60_000)
-    console.log(`${LOG} Loaded ${Object.keys(cache.models).length} model(s) from cache (${ageMins}m old)`)
     return cache.models
   } catch {
     return null
@@ -49,8 +45,7 @@ export function saveModelCache(providerId: string, models: Record<string, LiteLL
       models,
     }
     fs.writeFileSync(getCachePath(), JSON.stringify(cache, null, 2), 'utf-8')
-    console.log(`${LOG} Saved ${Object.keys(models).length} model(s) to cache`)
-  } catch (err) {
-    console.warn(`${LOG} Failed to save model cache: ${err}`)
+  } catch {
+    // Non-fatal — discovery still succeeded, cache will be written next time
   }
 }
