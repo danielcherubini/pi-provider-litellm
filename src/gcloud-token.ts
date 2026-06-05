@@ -3,6 +3,7 @@ import { join } from 'path'
 
 let cachedToken: string | null = null
 let cachedAt: number = 0
+let inflight: Promise<string | null> | null = null
 export const CACHE_TTL = 50 * 60 * 1000 // 50 minutes in ms
 
 interface AuthorizedUserCredentials {
@@ -94,6 +95,7 @@ async function exchangeRefreshToken(credentials: AuthorizedUserCredentials): Pro
 
 /**
  * Gets a Google OAuth access token from the ADC JSON file, cached with a 50-minute TTL.
+ * Concurrent calls share one in-flight request (request coalescing).
  * Returns null if credentials are not available or the token cannot be fetched.
  * Logs a warning on failure.
  */
@@ -103,37 +105,58 @@ export async function getGcloudToken(): Promise<string | null> {
     return cachedToken
   }
 
-  const adcPath = getAdcPath()
-  if (!adcPath) {
-    console.warn(
-      '[pi-provider-litellm] No Google ADC file found. Set GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default login`.',
-    )
-    return null
+  // Coalesce concurrent calls: reuse the in-flight promise if one exists
+  if (inflight) {
+    return inflight
   }
 
-  const credentials = readCredentials(adcPath)
-  if (!credentials) {
-    console.warn(`[pi-provider-litellm] Failed to read ADC file: ${adcPath}`)
-    return null
-  }
+  inflight = (async () => {
+    try {
+      const adcPath = getAdcPath()
+      if (!adcPath) {
+        console.warn(
+          '[pi-provider-litellm] No Google ADC file found. Set GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default login`.',
+        )
+        return null
+      }
 
-  if (credentials.type === 'authorized_user') {
-    const token = await exchangeRefreshToken(credentials)
-    if (token) {
-      cachedToken = token
-      cachedAt = Date.now()
+      const credentials = readCredentials(adcPath)
+      if (!credentials) {
+        console.warn(`[pi-provider-litellm] Failed to read ADC file: ${adcPath}`)
+        return null
+      }
+
+      if (credentials.type === 'authorized_user') {
+        const token = await exchangeRefreshToken(credentials)
+        if (token) {
+          cachedToken = token
+          cachedAt = Date.now()
+        }
+        return token
+      }
+
+      if (credentials.type === 'service_account') {
+        console.warn('[pi-provider-litellm] Service account credentials are not yet supported. Use an authorized_user credential or set GOOGLE_APPLICATION_CREDENTIALS to an authorized_user JSON file.')
+        return null
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+      console.warn(`[pi-provider-litellm] Unknown credential type: ${(credentials as { type: string }).type}`)
+      return null
+    } finally {
+      inflight = null
     }
-    return token
-  }
+  })()
 
-  if (credentials.type === 'service_account') {
-    console.warn('[pi-provider-litellm] Service account credentials are not yet supported. Use an authorized_user credential or set GOOGLE_APPLICATION_CREDENTIALS to an authorized_user JSON file.')
-    return null
-  }
+  return inflight
+}
 
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-  console.warn(`[pi-provider-litellm] Unknown credential type: ${(credentials as { type: string }).type}`)
-  return null
+/**
+ * Pre-warms the token cache by fetching a token in the background.
+ * Safe to call without awaiting — errors are swallowed since getGcloudToken logs them.
+ */
+export function warmGcloudToken(): void {
+  void getGcloudToken()
 }
 
 /**
@@ -142,4 +165,5 @@ export async function getGcloudToken(): Promise<string | null> {
 export function resetTokenCache(): void {
   cachedToken = null
   cachedAt = 0
+  inflight = null
 }

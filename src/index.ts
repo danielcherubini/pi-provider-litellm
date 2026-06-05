@@ -1,12 +1,15 @@
 import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult } from '@earendil-works/pi-coding-agent'
 import { resolvePluginConfig, discoverModels, discoverMcpTools, listSkills, buildProviderConfig } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions, createSkillsInjector } from './tools.js'
-import { getGcloudToken } from './gcloud-token.js'
+import { getGcloudToken, warmGcloudToken } from './gcloud-token.js'
 import type { LiteLLMModelInfo, McpTool, PluginConfig } from './types.js'
+
+const LOG = '[pi-provider-litellm]'
 
 export default async function (pi: ExtensionAPI): Promise<void> {
   const config = resolvePluginConfig()
   if (!config) {
+    console.warn(`${LOG} No config found — set LITELLM_URL and LITELLM_KEY (or LITELLM_GCLOUD_TOKEN_AUTH=1)`)
     return
   }
 
@@ -22,7 +25,17 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     return config.apiKey
   }
 
-  await discoverAndRegister(pi, config, getToken)
+  console.log(`${LOG} Starting — provider: ${config.providerId}, url: ${config.url}, gcloudAuth: ${isGcloudAuth}`)
+
+  // Pre-warm the gcloud token immediately so it's cached before discovery starts
+  if (isGcloudAuth) {
+    console.log(`${LOG} Pre-warming gcloud token...`)
+    warmGcloudToken()
+  }
+
+  // Fire-and-forget initial discovery so extension init returns immediately.
+  // Models will be registered as soon as discovery completes.
+  void discoverAndRegister(pi, config, getToken)
 
   const injector = createSkillsInjector(config, getToken)
   const setupCompleteSessions = new Set<string>()
@@ -37,6 +50,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   })
 
   pi.on('session_start', async (_event, _ctx) => {
+    console.log(`${LOG} session_start — re-running discovery`)
     setupCompleteSessions.clear()
     injector.clearCache()
     await discoverAndRegister(pi, config, getToken)
@@ -55,6 +69,8 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
   }
 
   const DISCOVERY_TIMEOUT_MS = 30_000
+  const start = Date.now()
+  console.log(`${LOG} Discovery starting...`)
 
   let modelsResult: PromiseSettledResult<Record<string, LiteLLMModelInfo>>
   let mcpResult: PromiseSettledResult<McpTool[]>
@@ -81,14 +97,24 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
     modelsResult = settledResults[0]
     mcpResult = settledResults[1]
   } catch (error) {
+    console.error(`${LOG} Discovery failed: ${error}`)
     modelsResult = { status: 'rejected', reason: error as Error }
     mcpResult = { status: 'rejected', reason: error as Error }
   }
 
-  if (modelsResult.status === 'fulfilled' && Object.keys(modelsResult.value).length > 0) {
-    const token = await getToken()
-    const providerConfig = buildProviderConfig(config.url, token, modelsResult.value)
-    pi.registerProvider(config.providerId, providerConfig)
+  if (modelsResult.status === 'fulfilled') {
+    const modelCount = Object.keys(modelsResult.value).length
+    if (modelCount > 0) {
+      console.log(`${LOG} Discovered ${modelCount} models in ${Date.now() - start}ms: ${Object.keys(modelsResult.value).join(', ')}`)
+      const token = await getToken()
+      const providerConfig = buildProviderConfig(config.url, token, modelsResult.value)
+      pi.registerProvider(config.providerId, providerConfig)
+      console.log(`${LOG} Provider "${config.providerId}" registered`)
+    } else {
+      console.warn(`${LOG} No models discovered (${Date.now() - start}ms) — check LiteLLM /health endpoint`)
+    }
+  } else {
+    console.error(`${LOG} Model discovery error: ${modelsResult.reason}`)
   }
 
   if (mcpResult.status === 'fulfilled') {
@@ -96,10 +122,14 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
     for (const tool of mcpTools) {
       pi.registerTool(tool)
     }
+    console.log(`${LOG} Registered ${mcpTools.length} MCP tool(s)`)
+  } else {
+    console.warn(`${LOG} MCP tool discovery failed: ${mcpResult.reason}`)
   }
 
   const skillTools = createSkillToolDefinitions(config, getToken)
   for (const tool of skillTools) {
     pi.registerTool(tool)
   }
+  console.log(`${LOG} Registered ${skillTools.length} skill tool(s)`)
 }

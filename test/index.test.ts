@@ -35,11 +35,13 @@ describe('extension entry point', () => {
     vi.resetModules()
     origFetch = globalThis.fetch
     globalThis.fetch = vi.fn() as unknown as typeof global.fetch
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
   })
 
   afterEach(() => {
     globalThis.fetch = origFetch
     vi.restoreAllMocks()
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
   })
 
   it('returns early when no config is available', async () => {
@@ -75,6 +77,7 @@ describe('extension entry point', () => {
     const mod = await import('../src/index.js')
     const mockPi = createMockPi()
     await mod.default(mockPi as unknown as ExtensionAPI)
+    await new Promise((r) => setTimeout(r, 0)) // flush fire-and-forget discovery
 
     expect(mockPi.unregisterProvider).toHaveBeenCalledWith('litellm')
     expect(mockPi.registerProvider).toHaveBeenCalled()
@@ -95,6 +98,7 @@ describe('extension entry point', () => {
     const mod = await import('../src/index.js')
     const mockPi = createMockPi()
     await mod.default(mockPi as unknown as ExtensionAPI)
+    await new Promise((r) => setTimeout(r, 0)) // flush fire-and-forget discovery
 
     expect(mockPi.registerProvider).not.toHaveBeenCalled()
     expect(mockPi.registerTool).toHaveBeenCalled()
@@ -112,6 +116,7 @@ describe('extension entry point', () => {
     const mod = await import('../src/index.js')
     const mockPi = createMockPi()
     await mod.default(mockPi as unknown as ExtensionAPI)
+    await new Promise((r) => setTimeout(r, 0)) // flush fire-and-forget discovery
 
     expect(mockPi.registerTool).toHaveBeenCalled()
   })
