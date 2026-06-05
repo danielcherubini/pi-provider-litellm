@@ -26,16 +26,14 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     return config.apiKey
   }
 
-  // Pre-warm the gcloud token immediately so it's cached before discovery starts
-  if (isGcloudAuth) warmGcloudToken()
-
-  // Register from cache synchronously — no await — so models are visible
-  // before the framework resolves model patterns. Discovery will re-register
-  // with a live token once it completes.
+  // Register from cache first — before any auth — so models are visible immediately
   const cached = loadModelCache(config.providerId)
   if (cached) {
     pi.registerProvider(config.providerId, buildProviderConfig(config.url, config.apiKey, cached))
   }
+
+  // Pre-warm the gcloud token in the background
+  if (isGcloudAuth) warmGcloudToken()
 
   // Fire-and-forget discovery — refreshes cache and re-registers with live data
   void discoverAndRegister(pi, config, getToken)
