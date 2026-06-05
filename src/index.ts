@@ -2,6 +2,7 @@ import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult }
 import { resolvePluginConfig, discoverModels, discoverMcpTools, listSkills, buildProviderConfig } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions, createSkillsInjector } from './tools.js'
 import { getGcloudToken, warmGcloudToken } from './gcloud-token.js'
+import { loadModelCache, saveModelCache } from './model-cache.js'
 import type { LiteLLMModelInfo, McpTool, PluginConfig } from './types.js'
 
 const LOG = '[pi-provider-litellm]'
@@ -33,8 +34,16 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     warmGcloudToken()
   }
 
-  // Fire-and-forget initial discovery so extension init returns immediately.
-  // Models will be registered as soon as discovery completes.
+  // Register from cache immediately so models are available on first load
+  const cached = loadModelCache(config.providerId)
+  if (cached) {
+    const token = await getToken()
+    const providerConfig = buildProviderConfig(config.url, token, cached)
+    pi.registerProvider(config.providerId, providerConfig)
+    console.log(`${LOG} Provider "${config.providerId}" registered from cache`)
+  }
+
+  // Fire-and-forget discovery — refreshes cache and re-registers with live data
   void discoverAndRegister(pi, config, getToken)
 
   const injector = createSkillsInjector(config, getToken)
@@ -106,6 +115,7 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
     const modelCount = Object.keys(modelsResult.value).length
     if (modelCount > 0) {
       console.log(`${LOG} Discovered ${modelCount} models in ${Date.now() - start}ms: ${Object.keys(modelsResult.value).join(', ')}`)
+      saveModelCache(config.providerId, modelsResult.value)
       const token = await getToken()
       const providerConfig = buildProviderConfig(config.url, token, modelsResult.value)
       pi.registerProvider(config.providerId, providerConfig)

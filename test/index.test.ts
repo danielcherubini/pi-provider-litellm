@@ -36,6 +36,11 @@ describe('extension entry point', () => {
     origFetch = globalThis.fetch
     globalThis.fetch = vi.fn() as unknown as typeof global.fetch
     delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    // Default: no cache — individual tests can override
+    vi.doMock('../src/model-cache.js', () => ({
+      loadModelCache: vi.fn().mockReturnValue(null),
+      saveModelCache: vi.fn(),
+    }))
   })
 
   afterEach(() => {
@@ -129,6 +134,10 @@ describe('discoverAndRegister', () => {
     vi.resetModules()
     origFetch = globalThis.fetch
     globalThis.fetch = vi.fn() as unknown as typeof global.fetch
+    vi.doMock('../src/model-cache.js', () => ({
+      loadModelCache: vi.fn().mockReturnValue(null),
+      saveModelCache: vi.fn(),
+    }))
   })
 
   afterEach(() => {
