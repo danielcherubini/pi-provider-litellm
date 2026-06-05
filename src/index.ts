@@ -1,6 +1,7 @@
 import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult } from '@earendil-works/pi-coding-agent'
 import { resolvePluginConfig, discoverModels, discoverMcpTools, listSkills, buildProviderConfig } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions, createSkillsInjector } from './tools.js'
+import { getGcloudToken } from './gcloud-token.js'
 import type { LiteLLMModelInfo, McpTool, PluginConfig } from './types.js'
 
 export default async function (pi: ExtensionAPI): Promise<void> {
@@ -9,9 +10,21 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     return
   }
 
-  await discoverAndRegister(pi, config)
+  const isGcloudAuth = !!(process.env.LITELLM_GCLOUD_TOKEN_AUTH &&
+    process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
+    process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0')
 
-  const injector = createSkillsInjector(config, config.apiKey)
+  // When gcloud token auth is enabled, fetch a live token instead of using the static apiKey
+  const getToken = async (): Promise<string> => {
+    if (isGcloudAuth) {
+      return (await getGcloudToken()) ?? ''
+    }
+    return config.apiKey
+  }
+
+  await discoverAndRegister(pi, config, getToken)
+
+  const injector = createSkillsInjector(config, getToken)
   const setupCompleteSessions = new Set<string>()
   pi.on('before_agent_start', async (event: BeforeAgentStartEvent, ctx): Promise<BeforeAgentStartEventResult> => {
     const sessionId = ctx.sessionManager.getSessionFile()
@@ -26,7 +39,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.on('session_start', async (_event, _ctx) => {
     setupCompleteSessions.clear()
     injector.clearCache()
-    await discoverAndRegister(pi, config)
+    await discoverAndRegister(pi, config, getToken)
   })
 
   pi.on('session_shutdown', async (_event, _ctx) => {
@@ -34,7 +47,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   })
 }
 
-export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig): Promise<void> {
+export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig, getToken: () => Promise<string>): Promise<void> {
   try {
     pi.unregisterProvider(config.providerId)
   } catch {
@@ -51,11 +64,12 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
   })
 
   try {
+    const token = await getToken()
     const results = await Promise.race([
       Promise.allSettled([
-        discoverModels(config, config.apiKey),
-        discoverMcpTools(config, config.apiKey),
-        listSkills(config, config.apiKey),
+        discoverModels(config, token),
+        discoverMcpTools(config, token),
+        listSkills(config, token),
       ]),
       timeoutPromise,
     ])
@@ -72,18 +86,19 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
   }
 
   if (modelsResult.status === 'fulfilled' && Object.keys(modelsResult.value).length > 0) {
-    const providerConfig = buildProviderConfig(config.url, config.apiKey, modelsResult.value)
+    const token = await getToken()
+    const providerConfig = buildProviderConfig(config.url, token, modelsResult.value)
     pi.registerProvider(config.providerId, providerConfig)
   }
 
   if (mcpResult.status === 'fulfilled') {
-    const mcpTools = createMcpToolDefinitions(config, config.apiKey, mcpResult.value)
+    const mcpTools = createMcpToolDefinitions(config, getToken, mcpResult.value)
     for (const tool of mcpTools) {
       pi.registerTool(tool)
     }
   }
 
-  const skillTools = createSkillToolDefinitions(config, config.apiKey)
+  const skillTools = createSkillToolDefinitions(config, getToken)
   for (const tool of skillTools) {
     pi.registerTool(tool)
   }

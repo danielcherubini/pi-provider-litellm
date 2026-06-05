@@ -198,6 +198,19 @@ describe('resolvePluginConfig', () => {
     })
   })
 
+  it('returns config with empty apiKey when gcloud auth is enabled and no LITELLM_KEY', () => {
+    process.env.LITELLM_URL = 'https://litellm.example.com'
+    delete process.env.LITELLM_KEY
+    process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+
+    const result = resolvePluginConfig()
+    expect(result).not.toBeNull()
+    expect(result!.url).toBe('https://litellm.example.com')
+    expect(result!.apiKey).toBe('')
+
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+  })
+
   it('returns null when no config available', () => {
     const savedUrl = process.env.LITELLM_URL
     const savedKey = process.env.LITELLM_KEY

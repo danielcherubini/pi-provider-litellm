@@ -3,6 +3,7 @@ import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult, 
 import type { PluginConfig } from '../src/types.js'
 
 const mockConfig: PluginConfig = { url: 'http://localhost:4000', apiKey: 'test-key', providerId: 'litellm' }
+const mockGetToken = () => Promise.resolve('test-key')
 
 function createMockPi(): MockPi {
   const handlers: Record<string, Function[]> = {}
@@ -143,7 +144,7 @@ describe('discoverAndRegister', () => {
 
     const mod = await import('../src/index.js')
     const mockPi = createMockPi()
-    await mod.discoverAndRegister(mockPi as unknown as ExtensionAPI, mockConfig)
+    await mod.discoverAndRegister(mockPi as unknown as ExtensionAPI, mockConfig, mockGetToken)
 
     expect(mockPi.unregisterProvider).toHaveBeenCalledWith('litellm')
     expect(mockPi.registerProvider).toHaveBeenCalled()
@@ -160,7 +161,7 @@ describe('discoverAndRegister', () => {
 
     const mod = await import('../src/index.js')
     const mockPi = createMockPi()
-    await mod.discoverAndRegister(mockPi as unknown as ExtensionAPI, mockConfig)
+    await mod.discoverAndRegister(mockPi as unknown as ExtensionAPI, mockConfig, mockGetToken)
 
     expect(mockPi.registerProvider).not.toHaveBeenCalled()
     expect(mockPi.registerTool).toHaveBeenCalled()
@@ -177,7 +178,7 @@ describe('discoverAndRegister', () => {
 
     const mod = await import('../src/index.js')
     const mockPi = createMockPi()
-    await mod.discoverAndRegister(mockPi as unknown as ExtensionAPI, mockConfig)
+    await mod.discoverAndRegister(mockPi as unknown as ExtensionAPI, mockConfig, mockGetToken)
 
     expect(mockPi.registerTool).toHaveBeenCalled()
   })

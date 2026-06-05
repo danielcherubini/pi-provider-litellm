@@ -114,7 +114,7 @@ export function buildTypeBoxSchema(inputSchema: Record<string, unknown>): TSchem
 
 export function createMcpToolDefinitions(
   config: PluginConfig,
-  token: string,
+  getToken: () => Promise<string>,
   mcpTools: McpTool[],
 ): ToolDefinition[] {
   return mcpTools.map((tool) => {
@@ -141,6 +141,7 @@ export function createMcpToolDefinitions(
           ? (typeof params.args === 'string' ? (() => { try { return JSON.parse(params.args) } catch { return params.args } })() : params.args)
           : params
 
+        const token = await getToken()
         const result = await executeMcpTool(config, token, server, toolName, args as Record<string, unknown>)
         return {
           content: [{ type: 'text', text: result }],
@@ -153,7 +154,7 @@ export function createMcpToolDefinitions(
 
 export function createSkillToolDefinitions(
   config: PluginConfig,
-  token: string,
+  getToken: () => Promise<string>,
 ): ToolDefinition[] {
   return [
     {
@@ -168,6 +169,7 @@ export function createSkillToolDefinitions(
         _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
         _ctx: ExtensionContext,
       ): Promise<AgentToolResult<undefined>> {
+        const token = await getToken()
         const skills = await listSkills(config, token)
         if (!skills.length) {
           return { content: [{ type: 'text', text: 'No skills found.' }], details: undefined }
@@ -195,6 +197,7 @@ export function createSkillToolDefinitions(
         _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
         _ctx: ExtensionContext,
       ): Promise<AgentToolResult<undefined>> {
+        const token = await getToken()
         const skills = await listSkills(config, token)
         const skill = skills.find((s) => s.name === params.name)
         if (!skill) {
@@ -225,6 +228,7 @@ export function createSkillToolDefinitions(
         _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
         _ctx: ExtensionContext,
       ): Promise<AgentToolResult<undefined>> {
+        const token = await getToken()
         const result = await registerSkill(
           config,
           token,
@@ -249,6 +253,7 @@ export function createSkillToolDefinitions(
         _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
         _ctx: ExtensionContext,
       ): Promise<AgentToolResult<undefined>> {
+        const token = await getToken()
         const result = await enableSkill(config, token, params.name)
         return { content: [{ type: 'text', text: result }], details: undefined }
       },
@@ -265,6 +270,7 @@ export function createSkillToolDefinitions(
         _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
         _ctx: ExtensionContext,
       ): Promise<AgentToolResult<undefined>> {
+        const token = await getToken()
         const result = await disableSkill(config, token, params.name)
         return { content: [{ type: 'text', text: result }], details: undefined }
       },
@@ -279,7 +285,7 @@ export interface SkillsInjector {
 
 export function createSkillsInjector(
   config: PluginConfig,
-  token: string,
+  getToken: () => Promise<string>,
 ): SkillsInjector {
   let cache: { skills: Skill[]; timestamp: number } | null = null
   const TTL = 60_000 // 60 seconds
@@ -289,6 +295,7 @@ export function createSkillsInjector(
     if (cache && now - cache.timestamp < TTL) {
       return cache.skills
     }
+    const token = await getToken()
     const skills = await listSkills(config, token)
     cache = { skills, timestamp: now }
     return skills

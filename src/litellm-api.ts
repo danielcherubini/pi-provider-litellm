@@ -318,9 +318,15 @@ export function resolvePluginConfig(): PluginConfig | null {
   // Check env vars first
   const envUrl = process.env.LITELLM_URL
   const envKey = process.env.LITELLM_KEY
+  const envGcloudAuth = process.env.LITELLM_GCLOUD_TOKEN_AUTH
 
   if (envUrl && envKey) {
     return { url: envUrl, apiKey: envKey, providerId: process.env.LITELLM_PROVIDER_ID ?? 'litellm' }
+  }
+
+  // Allow missing LITELLM_KEY when gcloud token auth is enabled
+  if (envUrl && envGcloudAuth && envGcloudAuth !== '' && envGcloudAuth !== '0') {
+    return { url: envUrl, apiKey: envKey ?? '', providerId: process.env.LITELLM_PROVIDER_ID ?? 'litellm' }
   }
 
   // Check settings.json
