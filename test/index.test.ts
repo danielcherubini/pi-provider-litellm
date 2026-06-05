@@ -66,7 +66,7 @@ describe('extension entry point', () => {
     expect(mockPi.registerTool).not.toHaveBeenCalled()
   })
 
-  it('calls unregisterProvider before registerProvider', async () => {
+  it('registers provider after discovery', async () => {
     const mockModels = { 'gpt-4': { model_name: 'gpt-4' } }
     const mockMcpTools: unknown[] = []
     const mockSkills: unknown[] = []
@@ -82,13 +82,8 @@ describe('extension entry point', () => {
     const mod = await import('../src/index.js')
     const mockPi = createMockPi()
     await mod.default(mockPi as unknown as ExtensionAPI)
-    await new Promise((r) => setTimeout(r, 0)) // flush fire-and-forget discovery
 
-    expect(mockPi.unregisterProvider).toHaveBeenCalledWith('litellm')
     expect(mockPi.registerProvider).toHaveBeenCalled()
-    const unregisterCallIndex = mockPi.unregisterProvider.mock.calls.length - 1
-    const registerCallIndex = mockPi.registerProvider.mock.calls.length - 1
-    expect(mockPi.unregisterProvider.mock.calls[unregisterCallIndex]).toBeDefined()
   })
 
   it('registers tools even when model discovery fails with 403', async () => {
@@ -160,7 +155,6 @@ describe('discoverAndRegister', () => {
     const mockPi = createMockPi()
     await mod.discoverAndRegister(mockPi as unknown as ExtensionAPI, mockConfig, mockGetToken)
 
-    expect(mockPi.unregisterProvider).toHaveBeenCalledWith('litellm')
     expect(mockPi.registerProvider).toHaveBeenCalled()
   })
 

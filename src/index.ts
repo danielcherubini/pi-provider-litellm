@@ -1,7 +1,7 @@
 import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult } from '@earendil-works/pi-coding-agent'
 import { resolvePluginConfig, discoverModels, discoverMcpTools, listSkills, buildProviderConfig } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions, createSkillsInjector } from './tools.js'
-import { getGcloudToken, warmGcloudToken } from './gcloud-token.js'
+import { getGcloudToken } from './gcloud-token.js'
 import { loadModelCache, saveModelCache } from './model-cache.js'
 import type { LiteLLMModelInfo, McpTool, PluginConfig } from './types.js'
 
@@ -26,17 +26,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     return config.apiKey
   }
 
-  // Register from cache first — before any auth — so models are visible immediately
-  const cached = loadModelCache(config.providerId)
-  if (cached) {
-    pi.registerProvider(config.providerId, buildProviderConfig(config.url, config.apiKey, cached))
-  }
-
-  // Pre-warm the gcloud token in the background
-  if (isGcloudAuth) warmGcloudToken()
-
-  // Fire-and-forget discovery — refreshes cache and re-registers with live data
-  void discoverAndRegister(pi, config, getToken)
+  // Await discovery so PI blocks until models are registered before resolving
+  // model patterns. Cache is loaded at the top of discoverAndRegister so the
+  // first call returns quickly on subsequent startups.
+  await discoverAndRegister(pi, config, getToken)
 
   const injector = createSkillsInjector(config, getToken)
   const setupCompleteSessions = new Set<string>()
@@ -62,10 +55,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 }
 
 export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig, getToken: () => Promise<string>): Promise<void> {
-  try {
-    pi.unregisterProvider(config.providerId)
-  } catch {
-    // Provider not yet registered
+  // Register from cache immediately so models are visible before live discovery
+  // completes. On first-ever run there is no cache, so this is a no-op.
+  const cached = loadModelCache(config.providerId)
+  if (cached) {
+    pi.registerProvider(config.providerId, buildProviderConfig(config.url, config.apiKey, cached))
   }
 
   const DISCOVERY_TIMEOUT_MS = 30_000
