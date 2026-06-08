@@ -63,8 +63,6 @@ export async function discoverModels(config: PluginConfig, token: string): Promi
     { headers: { 'Authorization': `Bearer ${token}` } }
   )
 
-  console.log(`[pi-provider-litellm] /v1/model/info returned ${modelInfoRes?.data?.length ?? 0} models`)
-
   if (modelInfoRes?.data && Array.isArray(modelInfoRes.data) && modelInfoRes.data.length > 0) {
     const infoMap: Record<string, LiteLLMModelInfo> = {}
 
