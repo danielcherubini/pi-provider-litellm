@@ -105,7 +105,7 @@ export async function discoverAndRegister(pi: ExtensionAPI, config: PluginConfig
       const providerConfig = buildProviderConfig(config.url, token, modelsResult.value)
       pi.registerProvider(config.providerId, providerConfig)
     } else {
-      console.warn(`${LOG} No models discovered — check LiteLLM /health endpoint`)
+      console.warn(`${LOG} No models discovered — check LiteLLM /v1/model/info endpoint (URL: ${config.url})`)
     }
   } else {
     console.error(`${LOG} Model discovery error: ${modelsResult.reason}`)
