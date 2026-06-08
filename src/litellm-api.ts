@@ -56,46 +56,25 @@ async function fetchJsonWithStatus<T>(url: string, timeout: number, options?: Re
 }
 
 export async function discoverModels(config: PluginConfig, token: string): Promise<Record<string, LiteLLMModelInfo>> {
-  // Try /health first (traditional approach), fall back to /v1/model/info
-  const { data: healthRes, status: healthStatus } = await fetchJsonWithStatus<LiteLLMHealthResponse>(
-    `${config.url}/health`,
+  // Primary: use /v1/model/info — single call, returns all models with full metadata
+  const modelInfoRes = await fetchJson<{ data?: unknown[] }>(
+    `${config.url}/v1/model/info`,
     DISCOVERY_TIMEOUT,
     { headers: { 'Authorization': `Bearer ${token}` } }
   )
 
-  if (healthStatus === 403) {
-    throw new Error('Access denied (403). Check your LiteLLM API key or contact your admin.')
-  }
-
-  // If /health has healthy endpoints, use traditional approach
-  if (healthRes?.healthy_endpoints?.length) {
+  if (modelInfoRes?.data && Array.isArray(modelInfoRes.data) && modelInfoRes.data.length > 0) {
     const infoMap: Record<string, LiteLLMModelInfo> = {}
 
-    const results = await Promise.allSettled(
-      healthRes.healthy_endpoints.map(async (endpoint: LiteLLMHealthModel) => {
-        const raw = await fetchJson<unknown>(
-          `${config.url}/model/info?litellm_model_id=${encodeURIComponent(endpoint.model_id)}`,
-          DISCOVERY_TIMEOUT,
-          { headers: { 'Authorization': `Bearer ${token}` } }
-        )
-        return { endpoint, raw }
-      })
-    )
+    for (const entry of modelInfoRes.data) {
+      if (typeof entry !== 'object' || !entry) continue
+      const e = entry as Record<string, unknown>
 
-    for (const result of results) {
-      if (result.status !== 'fulfilled') continue
-      const { raw } = result.value
-      if (!raw || typeof raw !== 'object') continue
-
-      const data = (raw as { data?: unknown[] }).data
-      if (!Array.isArray(data) || !data.length) continue
-      const entry = data[0] as Record<string, unknown>
-
-      const modelName = typeof entry.model_name === 'string' ? entry.model_name : null
+      const modelName = typeof e.model_name === 'string' ? e.model_name : null
       if (!modelName) continue
 
-      const modelInfo = (entry.model_info ?? {}) as Record<string, unknown>
-      const litellmParams = (entry.litellm_params ?? {}) as Record<string, unknown>
+      const modelInfo = (e.model_info ?? {}) as Record<string, unknown>
+      const litellmParams = (e.litellm_params ?? {}) as Record<string, unknown>
 
       const merged: Record<string, unknown> = {
         model_name: modelName,
@@ -116,26 +95,46 @@ export async function discoverModels(config: PluginConfig, token: string): Promi
     return infoMap
   }
 
-  // Fallback: use /v1/model/info to get all models
-  const modelInfoRes = await fetchJson<{ data?: unknown[] }>(
-    `${config.url}/v1/model/info`,
+  // Fallback: use /health + /model/info per model (legacy approach)
+  const { data: healthRes, status } = await fetchJsonWithStatus<LiteLLMHealthResponse>(
+    `${config.url}/health`,
     DISCOVERY_TIMEOUT,
     { headers: { 'Authorization': `Bearer ${token}` } }
   )
 
-  if (!modelInfoRes?.data || !Array.isArray(modelInfoRes.data)) return {}
+  if (status === 403) {
+    throw new Error('Access denied (403). Check your LiteLLM API key or contact your admin.')
+  }
+
+  if (!healthRes || !healthRes.healthy_endpoints?.length) return {}
 
   const infoMap: Record<string, LiteLLMModelInfo> = {}
 
-  for (const entry of modelInfoRes.data) {
-    if (typeof entry !== 'object' || !entry) continue
-    const e = entry as Record<string, unknown>
+  const results = await Promise.allSettled(
+    healthRes.healthy_endpoints.map(async (endpoint: LiteLLMHealthModel) => {
+      const raw = await fetchJson<unknown>(
+        `${config.url}/model/info?litellm_model_id=${encodeURIComponent(endpoint.model_id)}`,
+        DISCOVERY_TIMEOUT,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      )
+      return { endpoint, raw }
+    })
+  )
 
-    const modelName = typeof e.model_name === 'string' ? e.model_name : null
+  for (const result of results) {
+    if (result.status !== 'fulfilled') continue
+    const { raw } = result.value
+    if (!raw || typeof raw !== 'object') continue
+
+    const data = (raw as { data?: unknown[] }).data
+    if (!Array.isArray(data) || !data.length) continue
+    const entry = data[0] as Record<string, unknown>
+
+    const modelName = typeof entry.model_name === 'string' ? entry.model_name : null
     if (!modelName) continue
 
-    const modelInfo = (e.model_info ?? {}) as Record<string, unknown>
-    const litellmParams = (e.litellm_params ?? {}) as Record<string, unknown>
+    const modelInfo = (entry.model_info ?? {}) as Record<string, unknown>
+    const litellmParams = (entry.litellm_params ?? {}) as Record<string, unknown>
 
     const merged: Record<string, unknown> = {
       model_name: modelName,
