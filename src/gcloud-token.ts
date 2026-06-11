@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 
+const LOG = '[pi-provider-litellm]'
+
 let cachedToken: string | null = null
 let cachedAt: number = 0
 let inflight: Promise<string | null> | null = null
@@ -81,14 +83,14 @@ async function exchangeRefreshToken(credentials: AuthorizedUserCredentials): Pro
 
     if (!response.ok) {
       const text = await response.text()
-      console.warn(`[pi-provider-litellm] Token exchange failed (${response.status}): ${text}`)
+      console.warn(`${LOG} Token exchange failed (${response.status}): ${text}`)
       return null
     }
 
     const data = await response.json()
     return data.access_token || null
   } catch (error) {
-    console.warn(`[pi-provider-litellm] Token exchange failed: ${error}`)
+    console.warn(`${LOG} Token exchange failed: ${error}`)
     return null
   }
 }
@@ -115,14 +117,14 @@ export async function getGcloudToken(): Promise<string | null> {
       const adcPath = getAdcPath()
       if (!adcPath) {
         console.warn(
-          '[pi-provider-litellm] No Google ADC file found. Set GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default login`.',
+          `${LOG} No Google ADC file found. Set GOOGLE_APPLICATION_CREDENTIALS or run \`gcloud auth application-default login\`.`,
         )
         return null
       }
 
       const credentials = readCredentials(adcPath)
       if (!credentials) {
-        console.warn(`[pi-provider-litellm] Failed to read ADC file: ${adcPath}`)
+        console.warn(`${LOG} Failed to read ADC file: ${adcPath}`)
         return null
       }
 
@@ -136,12 +138,12 @@ export async function getGcloudToken(): Promise<string | null> {
       }
 
       if (credentials.type === 'service_account') {
-        console.warn('[pi-provider-litellm] Service account credentials are not yet supported. Use an authorized_user credential or set GOOGLE_APPLICATION_CREDENTIALS to an authorized_user JSON file.')
+        console.warn(`${LOG} Service account credentials are not yet supported. Use an authorized_user credential or set GOOGLE_APPLICATION_CREDENTIALS to an authorized_user JSON file.`)
         return null
       }
 
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-      console.warn(`[pi-provider-litellm] Unknown credential type: ${(credentials as { type: string }).type}`)
+      console.warn(`${LOG} Unknown credential type: ${(credentials as { type: string }).type}`)
       return null
     } finally {
       inflight = null
@@ -149,14 +151,6 @@ export async function getGcloudToken(): Promise<string | null> {
   })()
 
   return inflight
-}
-
-/**
- * Pre-warms the token cache by fetching a token in the background.
- * Safe to call without awaiting — errors are swallowed since getGcloudToken logs them.
- */
-export function warmGcloudToken(): void {
-  void getGcloudToken()
 }
 
 /**

@@ -2,6 +2,9 @@ import type { ProviderModelConfig, ProviderConfig } from '@earendil-works/pi-cod
 
 export type { ProviderModelConfig, ProviderConfig }
 
+/** The streamSimple signature as expected by pi's ProviderConfig. */
+export type StreamSimpleFn = NonNullable<ProviderConfig['streamSimple']>
+
 // LiteLLM /health endpoint response
 export interface LiteLLMHealthModel {
   model: string

@@ -1,6 +1,6 @@
 {
   "name": "@danmademe/pi-provider-litellm",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Pi agent extension for LiteLLM proxy auto-discovery and model configuration",
   "type": "module",
   "main": "./src/index.ts",
@@ -33,6 +33,7 @@
     "typebox": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "file:../../../../.npm-packages/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai",
     "@earendil-works/pi-coding-agent": "*",
     "@types/node": "^22.0.0",
     "typescript": "^5.9.0",

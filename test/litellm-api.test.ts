@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import { mapToProviderModel, resolvePluginConfig, fetchSkillContent, buildProviderConfig } from '../src/litellm-api.js'
 import type { LiteLLMModelInfo, Skill } from '../src/types.js'
@@ -211,21 +211,20 @@ describe('resolvePluginConfig', () => {
     delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
   })
 
-  it('returns null when no config available', () => {
-    const savedUrl = process.env.LITELLM_URL
-    const savedKey = process.env.LITELLM_KEY
+  it('falls back to settings.json when env vars are not set', () => {
     delete process.env.LITELLM_URL
     delete process.env.LITELLM_KEY
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
 
-    // Note: settings.json may still have config, so this tests the fallback path.
-    // If settings.json has pi-provider-litellm config, it will return that.
-    // If not, it returns null.
+    // resolvePluginConfig tries env vars first, then settings.json.
+    // Without env vars, it returns whatever settings.json provides (or null).
     const result = resolvePluginConfig()
-    // Accept either null (no settings) or the settings.json config
-    expect(result === null || (result && typeof result.url === 'string')).toBe(true)
-
-    if (savedUrl) process.env.LITELLM_URL = savedUrl
-    if (savedKey) process.env.LITELLM_KEY = savedKey
+    // On CI / fresh machines there's no settings.json → null.
+    // On dev machines with settings.json → a valid config.
+    if (result !== null) {
+      expect(typeof result.url).toBe('string')
+      expect(typeof result.apiKey).toBe('string')
+    }
   })
 
   it('prefers env vars over settings.json', () => {

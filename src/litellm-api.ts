@@ -11,11 +11,20 @@ import type {
   PluginConfig,
   ProviderModelConfig,
   ProviderConfig,
+  StreamSimpleFn,
 } from './types.js'
 
 const DISCOVERY_TIMEOUT = 10_000
 const TOOL_EXEC_TIMEOUT = 30_000
 const SKILL_FETCH_TIMEOUT = 5_000
+
+// Fields from litellm_params that may contain secrets or deployment details
+// and should not be persisted to the disk cache.
+const SENSITIVE_PARAM_KEYS = new Set([
+  'api_key', 'api_base', 'api_version', 'base_model',
+  'vertex_project', 'vertex_location', 'vertex_credentials',
+  'aws_access_key_id', 'aws_secret_access_key', 'aws_region_name',
+])
 
 async function fetchJson<T>(url: string, timeout: number, options?: RequestInit): Promise<T | null> {
   try {
@@ -76,20 +85,7 @@ export async function discoverModels(config: PluginConfig, token: string): Promi
       const modelInfo = (e.model_info ?? {}) as Record<string, unknown>
       const litellmParams = (e.litellm_params ?? {}) as Record<string, unknown>
 
-      const merged: Record<string, unknown> = {
-        model_name: modelName,
-        ...modelInfo,
-        ...litellmParams,
-      }
-
-      if (!merged.max_input_tokens && merged.max_tokens) {
-        merged.max_input_tokens = merged.max_tokens
-      }
-      if (!merged.max_output_tokens && merged.max_tokens) {
-        merged.max_output_tokens = merged.max_tokens
-      }
-
-      infoMap[modelName] = merged as LiteLLMModelInfo
+      infoMap[modelName] = mergeModelInfo(modelName, modelInfo, litellmParams)
     }
 
     return infoMap
@@ -136,23 +132,40 @@ export async function discoverModels(config: PluginConfig, token: string): Promi
     const modelInfo = (entry.model_info ?? {}) as Record<string, unknown>
     const litellmParams = (entry.litellm_params ?? {}) as Record<string, unknown>
 
-    const merged: Record<string, unknown> = {
-      model_name: modelName,
-      ...modelInfo,
-      ...litellmParams,
-    }
-
-    if (!merged.max_input_tokens && merged.max_tokens) {
-      merged.max_input_tokens = merged.max_tokens
-    }
-    if (!merged.max_output_tokens && merged.max_tokens) {
-      merged.max_output_tokens = merged.max_tokens
-    }
-
-    infoMap[modelName] = merged as LiteLLMModelInfo
+    infoMap[modelName] = mergeModelInfo(modelName, modelInfo, litellmParams)
   }
 
   return infoMap
+}
+
+function mergeModelInfo(
+  modelName: string,
+  modelInfo: Record<string, unknown>,
+  litellmParams: Record<string, unknown>,
+): LiteLLMModelInfo {
+  // Strip sensitive deployment/credential fields from litellm_params
+  // before merging — these should never be persisted to the disk cache.
+  const safeParams: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(litellmParams)) {
+    if (!SENSITIVE_PARAM_KEYS.has(k)) {
+      safeParams[k] = v
+    }
+  }
+
+  const merged: Record<string, unknown> = {
+    model_name: modelName,
+    ...modelInfo,
+    ...safeParams,
+  }
+
+  if (merged.max_input_tokens == null && merged.max_tokens != null) {
+    merged.max_input_tokens = merged.max_tokens
+  }
+  if (merged.max_output_tokens == null && merged.max_tokens != null) {
+    merged.max_output_tokens = merged.max_tokens
+  }
+
+  return merged as LiteLLMModelInfo
 }
 
 export async function discoverMcpTools(config: PluginConfig, token: string): Promise<McpTool[]> {
@@ -231,8 +244,8 @@ export async function registerSkill(
         name,
         git_url: gitUrl,
         git_path: gitPath,
-        ...(description && { description }),
-        ...(domain && { domain }),
+        ...(description != null && { description }),
+        ...(domain != null && { domain }),
       }),
       signal: controller.signal,
     })
@@ -412,7 +425,8 @@ export function mapToProviderModel(info: LiteLLMModelInfo): ProviderModelConfig 
 export function buildProviderConfig(
   url: string,
   apiKey: string,
-  models: Record<string, LiteLLMModelInfo>
+  models: Record<string, LiteLLMModelInfo>,
+  streamSimple?: StreamSimpleFn,
 ): ProviderConfig {
   const mappedModels = Object.values(models).map(mapToProviderModel)
 
@@ -421,5 +435,6 @@ export function buildProviderConfig(
     apiKey,
     api: 'openai-completions',
     models: mappedModels,
+    ...(streamSimple ? { streamSimple } : {}),
   }
 }
