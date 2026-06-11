@@ -67,8 +67,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.on('session_start', async (_event, ctx) => {
     // Assign a stable session ID so all requests in this pi session are grouped
     // under one conversation in the LiteLLM logs — mirroring Claude Code behaviour.
-    const sessionFile = ctx.sessionManager.getSessionFile()
-    setSessionId(sessionFile ?? crypto.randomUUID())
+    // getSessionId() returns the UUID from the session header directly.
+    setSessionId(ctx.sessionManager.getSessionId() ?? crypto.randomUUID())
 
     setupCompleteSessions.clear()
     injector.clearCache()
