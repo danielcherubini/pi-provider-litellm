@@ -88,14 +88,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     const refreshTimer = setInterval(async () => {
       try {
         const token = await getToken()
-        if (!token) {
-          console.warn(`${LOG} Token refresh returned empty — skipping provider re-registration`)
-          return
-        }
-        const models = loadModelCache(config.providerId)
-        if (models) {
-          pi.registerProvider(config.providerId, buildProviderConfig(config.url, token, models, streamSimple))
-          console.debug(`${LOG} Provider re-registered with fresh token`)
+        if (token) {
+          const models = loadModelCache(config.providerId)
+          if (models) {
+            pi.registerProvider(config.providerId, buildProviderConfig(config.url, token, models, streamSimple))
+          }
         }
       } catch (err) {
         console.warn(`${LOG} Token refresh failed: ${err}`)

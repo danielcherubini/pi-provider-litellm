@@ -135,7 +135,6 @@ export function createGcloudStreamSimple(
         const result = await runStream(token)
 
         if (result === '401') {
-          console.warn(`${LOG} Got 401 — force-refreshing gcloud token and retrying...`)
           resetTokenCache()
           const freshToken = await getToken()
 
@@ -147,7 +146,6 @@ export function createGcloudStreamSimple(
 
           // Re-register so the static provider config is also updated for future requests
           reregister(freshToken)
-          console.debug(`${LOG} Provider re-registered with fresh token — retrying request`)
 
           const retryResult = await runStream(freshToken)
           if (retryResult === '401') {
