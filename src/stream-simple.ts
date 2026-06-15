@@ -39,12 +39,18 @@ export function getSessionId(): string | undefined {
  *    via options.apiKey (the handler checks options.apiKey first, before the static key).
  * 3. On a 401 / auth error, force-refreshes the token, re-registers the provider, and retries once.
  *
- * @param getToken    Returns a fresh gcloud/static token
- * @param reregister  Calls pi.registerProvider with the new token so future requests also work
+ * For non-litellm providers (e.g., tama), delegates directly to the standard OpenAI
+ * completions streamer without gcloud token logic. This avoids interfering with other
+ * plugins that also use `api: 'openai-completions'`.
+ *
+ * @param getToken      Returns a fresh gcloud/static token
+ * @param reregister    Calls pi.registerProvider with the new token so future requests also work
+ * @param providerId    The litellm provider ID (default 'litellm') — used to scope gcloud logic
  */
 export function createGcloudStreamSimple(
   getToken: () => Promise<string>,
   reregister: (token: string) => void,
+  providerId: string = 'litellm',
 ): StreamSimpleFn {
 
   // Cast is needed because pi-ai types are the same shape but TypeScript treats
@@ -54,6 +60,13 @@ export function createGcloudStreamSimple(
     context: Context,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream {
+    // Only apply gcloud token refresh logic for this provider's models.
+    // Other plugins (e.g., pi-provider-tama) also use `api: 'openai-completions'`
+    // and would break if forced through gcloud token refresh.
+    if (model.provider !== providerId) {
+      return streamSimpleOpenAICompletions(model as Model<'openai-completions'>, context, options);
+    }
+
     // Inject x-litellm-session-id so LiteLLM groups all turns of this pi session
     // into a single conversation in the logs/UI — same behaviour as Claude Code.
     const sessionHeaders: Record<string, string> = currentSessionId
