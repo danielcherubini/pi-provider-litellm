@@ -1,6 +1,6 @@
 {
   "name": "@danmademe/pi-provider-litellm",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Pi agent extension for LiteLLM proxy auto-discovery and model configuration",
   "type": "module",
   "main": "./src/index.ts",
