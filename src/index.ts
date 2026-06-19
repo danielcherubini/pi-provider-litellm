@@ -31,10 +31,19 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   }
 
   // Re-register the provider with a fresh token (used by the streamSimple 401 handler)
+  // Wrapped in try-catch to silently ignore stale ctx errors after session reload.
   const reregister = (token: string): void => {
-    const models = loadModelCache(config.providerId)
-    if (models) {
-      pi.registerProvider(config.providerId, buildProviderConfig(config.url, token, models, streamSimple))
+    try {
+      const models = loadModelCache(config.providerId)
+      if (models) {
+        pi.registerProvider(config.providerId, buildProviderConfig(config.url, token, models, streamSimple))
+      }
+    } catch (err) {
+      // Ignore stale context errors — nothing to do if the session was replaced
+      const msg = String(err)
+      if (!msg.includes('stale')) {
+        console.warn(`${LOG} Provider re-registration failed: ${err}`)
+      }
     }
   }
 
@@ -47,6 +56,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
   // Track which tools have been registered to avoid duplicates across session restarts.
   const registeredTools = new Set<string>()
+
+  // Token refresh timer — cleared on session_shutdown to avoid stale context errors.
+  let refreshTimer: ReturnType<typeof setInterval> | undefined
 
   // Await discovery so PI blocks until models are registered before resolving
   // model patterns. Cache is loaded at the top of discoverAndRegister so the
@@ -79,6 +91,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.on('session_shutdown', async (_event, _ctx) => {
     setSessionId(undefined)
     injector.clearCache()
+    // Stop the token refresh timer — the captured pi context will be stale
+    // after session replacement/reload, so continuing to fire would throw.
+    if (refreshTimer) {
+      clearInterval(refreshTimer)
+      refreshTimer = undefined
+    }
   })
 
   // Periodically refresh the provider registration with a fresh token.
@@ -86,7 +104,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // every 45 minutes to stay ahead of expiry. The streamSimple handler also
   // handles reactive 401 recovery on each individual request.
   if (isGcloudAuth) {
-    const refreshTimer = setInterval(async () => {
+    refreshTimer = setInterval(async () => {
       try {
         const token = await getToken()
         if (token) {
@@ -96,7 +114,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
           }
         }
       } catch (err) {
-        console.warn(`${LOG} Token refresh failed: ${err}`)
+        // Ignore stale context errors — the session was replaced and this timer
+        // will be cleared shortly, or a new one will be set up in session_start.
+        const msg = String(err)
+        if (!msg.includes('stale')) {
+          console.warn(`${LOG} Token refresh failed: ${err}`)
+        }
       }
     }, TOKEN_REFRESH_INTERVAL_MS)
 
