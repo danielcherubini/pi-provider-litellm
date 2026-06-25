@@ -116,9 +116,8 @@ export function createGcloudStreamSimple(
 
         for await (const event of inner as AsyncIterable<Record<string, unknown>>) {
           if (event['type'] === 'error') {
-            const errMsg = String(
-              (event['error'] as Record<string, unknown> | undefined)?.['errorMessage'] ?? '',
-            )
+            const errObj = event['error'] as Record<string, unknown> | undefined
+            const errMsg = String(errObj?.['errorMessage'] ?? '')
             const is401 =
               httpStatus === 401 ||
               errMsg.includes('401') ||
@@ -126,6 +125,7 @@ export function createGcloudStreamSimple(
               errMsg.toLowerCase().includes('authentication')
 
             if (is401) {
+              console.warn(`${LOG} 401 detected (httpStatus=${httpStatus}, msg=${errMsg}) — will reset token cache and retry`)
               // Signal 401 without ending the outer stream — caller will retry
               return '401'
             }
@@ -148,20 +148,24 @@ export function createGcloudStreamSimple(
         const result = await runStream(token)
 
         if (result === '401') {
+          console.warn(`${LOG} Resetting token cache and fetching fresh gcloud token`)
           resetTokenCache()
           const freshToken = await getToken()
 
           if (!freshToken) {
+            console.warn(`${LOG} Failed to get fresh token after 401`)
             outerStream.push({ type: 'error', reason: 'error', error: makeError('Failed to refresh gcloud token after 401') })
             outerStream.end()
             return
           }
 
+          console.warn(`${LOG} Got fresh token, re-registering provider and retrying request`)
           // Re-register so the static provider config is also updated for future requests
           reregister(freshToken)
 
           const retryResult = await runStream(freshToken)
           if (retryResult === '401') {
+            console.warn(`${LOG} Retry also got 401 — giving up`)
             outerStream.push({ type: 'error', reason: 'error', error: makeError('Authentication failed after token refresh (401 Unauthorized)') })
             outerStream.end()
           }
