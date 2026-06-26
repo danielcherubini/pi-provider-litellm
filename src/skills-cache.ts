@@ -51,6 +51,11 @@ function saveCache(meta: CacheMeta): void {
   fs.writeFileSync(CACHE_META, JSON.stringify(meta, null, 2))
 }
 
+/** Validate skill name per Agent Skills spec (lowercase a-z, 0-9, hyphens). */
+function isValidSkillName(name: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*$/.test(name) && !name.startsWith('-') && !name.endsWith('-')
+}
+
 /** Write a single skill's SKILL.md to the cache. Returns the file path. */
 function writeSkill(skill: OpenCodeSkillEntry, content: string): string {
   ensureCacheDir()
@@ -117,35 +122,56 @@ export async function syncRemoteSkills(
   const names: string[] = []
   const errored: string[] = []
 
+  type FetchResult = { entry: OpenCodeSkillEntry; content: string | null; error: string | null }
+
   // Fetch in batches to avoid overwhelming the server
   for (let i = 0; i < entries.length; i += FETCH_BATCH_SIZE) {
     const batch = entries.slice(i, i + FETCH_BATCH_SIZE)
-    const results = await Promise.allSettled(
+    const results = await Promise.allSettled<FetchResult>(
       batch.map(async (entry) => {
+        // Validate name before using in filesystem paths (untrusted remote input)
+        if (!isValidSkillName(entry.name)) {
+          return { entry, content: null, error: 'invalid name' }
+        }
         const content = await fetchSkillContent(url, token, entry.name, log)
-        return { entry, content }
+        return { entry, content, error: null }
       }),
     )
 
     for (const result of results) {
-      if (result.status === 'fulfilled' && result.value.content) {
-        writeSkill(result.value.entry, result.value.content)
-        names.push(result.value.entry.name)
+      if (result.status !== 'fulfilled') {
+        errored.push('unknown')
+        continue
+      }
+
+      const { entry, content, error } = result.value
+
+      if (error === 'invalid name') {
+        errored.push(entry.name)
+        log(`[pi-provider-litellm] Warning: skipping skill with invalid name "${entry.name}"`)
+        continue
+      }
+
+      if (content) {
+        writeSkill(entry, content)
+        names.push(entry.name)
       } else {
-        const name = result.status === 'fulfilled' ? result.value.entry.name : 'unknown'
-        errored.push(name)
-        log(`[pi-provider-litellm] Warning: failed to fetch skill "${name}"`)
+        errored.push(entry.name)
+        log(`[pi-provider-litellm] Warning: failed to fetch skill "${entry.name}"`)
       }
     }
   }
 
-  // Prune stale skills no longer on the remote
-  pruneStaleSkills(new Set(names))
+  // Combine successful + errored (errored skills keep their cached content on disk)
+  const allCached = [...names, ...errored]
 
-  // Save cache metadata
+  // Prune stale skills no longer on the remote (only if they have no cached content)
+  pruneStaleSkills(new Set(allCached))
+
+  // Save cache metadata — include errored skills so transient failures don't evict them
   saveCache({
     timestamp: Date.now(),
-    skills: names.map(name => ({ name })),
+    skills: allCached.map(name => ({ name })),
   })
 
   const errorSuffix = errored.length ? ` (${errored.length} fetch errors)` : ''
