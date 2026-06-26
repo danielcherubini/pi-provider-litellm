@@ -6,8 +6,6 @@ import type {
   LiteLLMHealthResponse,
   LiteLLMModelInfo,
   McpTool,
-  Skill,
-  SkillPluginsResponse,
   PluginConfig,
   ProviderModelConfig,
   ProviderConfig,
@@ -16,7 +14,6 @@ import type {
 
 const DISCOVERY_TIMEOUT = 10_000
 const TOOL_EXEC_TIMEOUT = 30_000
-const SKILL_FETCH_TIMEOUT = 5_000
 
 // Fields from litellm_params that may contain secrets or deployment details
 // and should not be persisted to the disk cache.
@@ -210,158 +207,6 @@ export async function executeMcpTool(
   } catch (err: unknown) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`
   }
-}
-
-export async function listSkills(config: PluginConfig, token: string): Promise<Skill[]> {
-  const res = await fetchJson<SkillPluginsResponse>(
-    `${config.url}/claude-code/plugins`,
-    DISCOVERY_TIMEOUT,
-    { headers: { 'Authorization': `Bearer ${token}` } }
-  )
-  return res?.plugins || []
-}
-
-export async function registerSkill(
-  config: PluginConfig,
-  token: string,
-  name: string,
-  gitUrl: string,
-  gitPath: string,
-  description?: string,
-  domain?: string
-): Promise<string> {
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT)
-
-    const res = await fetch(`${config.url}/claude-code/plugins`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name,
-        git_url: gitUrl,
-        git_path: gitPath,
-        ...(description != null && { description }),
-        ...(domain != null && { domain }),
-      }),
-      signal: controller.signal,
-    })
-
-    clearTimeout(timer)
-
-    if (!res.ok) {
-      return `Error: HTTP ${res.status} ${res.statusText}`
-    }
-
-    const data = await res.json()
-    return JSON.stringify(data)
-  } catch (err: unknown) {
-    return `Error: ${err instanceof Error ? err.message : String(err)}`
-  }
-}
-
-export async function enableSkill(config: PluginConfig, token: string, name: string): Promise<string> {
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT)
-
-    const res = await fetch(`${config.url}/claude-code/plugins/${encodeURIComponent(name)}/enable`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-      signal: controller.signal,
-    })
-
-    clearTimeout(timer)
-
-    if (!res.ok) {
-      return `Error: HTTP ${res.status} ${res.statusText}`
-    }
-
-    const data = await res.json()
-    return JSON.stringify(data)
-  } catch (err: unknown) {
-    return `Error: ${err instanceof Error ? err.message : String(err)}`
-  }
-}
-
-export async function disableSkill(config: PluginConfig, token: string, name: string): Promise<string> {
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT)
-
-    const res = await fetch(`${config.url}/claude-code/plugins/${encodeURIComponent(name)}/disable`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-      signal: controller.signal,
-    })
-
-    clearTimeout(timer)
-
-    if (!res.ok) {
-      return `Error: HTTP ${res.status} ${res.statusText}`
-    }
-
-    const data = await res.json()
-    return JSON.stringify(data)
-  } catch (err: unknown) {
-    return `Error: ${err instanceof Error ? err.message : String(err)}`
-  }
-}
-
-export async function fetchSkillContent(skill: Skill): Promise<string | null> {
-  const { source } = skill
-  const { url, path } = source
-
-  // Build GitHub raw URL from git URL
-  let rawUrl: string | null = null
-
-  if (url.includes('github.com')) {
-    const gitMatch = url.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/)
-    if (gitMatch) {
-      const [, owner, repo] = gitMatch
-      const branch = 'main'
-      rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}${path ? '/' + path : ''}/SKILL.md`
-    }
-  }
-
-  if (!rawUrl) return null
-
-  // 2 retries on 429/5xx with exponential backoff
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) {
-      const backoff = Math.min(500 * 2 ** (attempt - 1), 1000)
-      await new Promise(r => setTimeout(r, backoff))
-    }
-    try {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), SKILL_FETCH_TIMEOUT)
-
-      const res = await fetch(rawUrl, { signal: controller.signal })
-      clearTimeout(timer)
-
-      if (res.ok) {
-        return await res.text()
-      }
-
-      // Retry on 429 or 5xx
-      if ((res.status === 429 || res.status >= 500) && attempt < 2) {
-        continue
-      }
-      return null
-    } catch {
-      if (attempt < 2) continue
-      return null
-    }
-  }
-
-  return null
 }
 
 export function resolvePluginConfig(): PluginConfig | null {

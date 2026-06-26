@@ -5,15 +5,9 @@ import type {
   AgentToolUpdateCallback,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
-import type { McpTool, PluginConfig, Skill } from './types.js'
-import {
-  executeMcpTool,
-  listSkills,
-  registerSkill,
-  enableSkill,
-  disableSkill,
-  fetchSkillContent,
-} from './litellm-api.js'
+import type { McpTool, PluginConfig } from './types.js'
+import { executeMcpTool } from './litellm-api.js'
+import { getCachedSkillNames } from './skills-cache.js'
 
 export function sanitizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '_')
@@ -152,15 +146,19 @@ export function createMcpToolDefinitions(
   })
 }
 
-export function createSkillToolDefinitions(
-  config: PluginConfig,
-  getToken: () => Promise<string>,
-): ToolDefinition[] {
+/**
+ * Skill tools for the remote skill cache.
+ *
+ * Skills are synced to ~/.pi/agent/skills/remote/ on startup, so pi discovers
+ * them natively (they appear in <available_skills> and the agent can read them
+ * directly). This tool just lists what's available.
+ */
+export function createSkillToolDefinitions(): ToolDefinition[] {
   return [
     {
       name: 'skill_list',
       label: 'skill_list',
-      description: 'List all available skills',
+      description: 'List all available skills (from remote cache)',
       parameters: Type.Object({}),
       async execute(
         _toolCallId: string,
@@ -169,148 +167,20 @@ export function createSkillToolDefinitions(
         _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
         _ctx: ExtensionContext,
       ): Promise<AgentToolResult<undefined>> {
-        const token = await getToken()
-        const skills = await listSkills(config, token)
-        if (!skills.length) {
-          return { content: [{ type: 'text', text: 'No skills found.' }], details: undefined }
+        const names = getCachedSkillNames()
+        if (!names.length) {
+          return { content: [{ type: 'text', text: 'No remote skills cached. They will be synced on next session start.' }], details: undefined }
         }
-        const header = '| Name | Version | Enabled | Description |'
-        const sep = '|------|---------|---------|-------------|'
-        const rows = skills.map((s) =>
-          `| ${s.name} | ${s.version} | ${s.enabled ? 'yes' : 'no'} | ${s.description ?? '-'} |`,
-        )
+        const header = '| Name | Local Path |'
+        const sep = '|------|------------|'
+        const rows = names.map((name) => `| ${name} | ~/.pi/agent/skills/remote/${name}/SKILL.md |`)
         return {
           content: [{ type: 'text', text: [header, sep, ...rows].join('\n') }],
           details: undefined,
         }
       },
     },
-    {
-      name: 'skill_use',
-      label: 'skill_use',
-      description: 'Get the full content of a skill by name',
-      parameters: Type.Object({ name: Type.String() }),
-      async execute(
-        _toolCallId: string,
-        params: { name: string },
-        _signal: AbortSignal | undefined,
-        _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
-        _ctx: ExtensionContext,
-      ): Promise<AgentToolResult<undefined>> {
-        const token = await getToken()
-        const skills = await listSkills(config, token)
-        const skill = skills.find((s) => s.name === params.name)
-        if (!skill) {
-          return { content: [{ type: 'text', text: `Skill "${params.name}" not found.` }], details: undefined }
-        }
-        const content = await fetchSkillContent(skill)
-        const text = content
-          ? `<skill name="${skill.name}">\n${content}\n</skill>`
-          : `Skill "${skill.name}" found but content could not be fetched.`
-        return { content: [{ type: 'text', text }], details: undefined }
-      },
-    },
-    {
-      name: 'skill_register',
-      label: 'skill_register',
-      description: 'Register a new skill from a git repository',
-      parameters: Type.Object({
-        name: Type.String(),
-        git_url: Type.String(),
-        git_path: Type.String(),
-        description: Type.String(),
-        domain: Type.Optional(Type.String()),
-      }),
-      async execute(
-        _toolCallId: string,
-        params: { name: string; git_url: string; git_path: string; description: string; domain?: string },
-        _signal: AbortSignal | undefined,
-        _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
-        _ctx: ExtensionContext,
-      ): Promise<AgentToolResult<undefined>> {
-        const token = await getToken()
-        const result = await registerSkill(
-          config,
-          token,
-          params.name,
-          params.git_url,
-          params.git_path,
-          params.description,
-          params.domain,
-        )
-        return { content: [{ type: 'text', text: result }], details: undefined }
-      },
-    },
-    {
-      name: 'skill_enable',
-      label: 'skill_enable',
-      description: 'Enable a skill by name',
-      parameters: Type.Object({ name: Type.String() }),
-      async execute(
-        _toolCallId: string,
-        params: { name: string },
-        _signal: AbortSignal | undefined,
-        _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
-        _ctx: ExtensionContext,
-      ): Promise<AgentToolResult<undefined>> {
-        const token = await getToken()
-        const result = await enableSkill(config, token, params.name)
-        return { content: [{ type: 'text', text: result }], details: undefined }
-      },
-    },
-    {
-      name: 'skill_disable',
-      label: 'skill_disable',
-      description: 'Disable a skill by name',
-      parameters: Type.Object({ name: Type.String() }),
-      async execute(
-        _toolCallId: string,
-        params: { name: string },
-        _signal: AbortSignal | undefined,
-        _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
-        _ctx: ExtensionContext,
-      ): Promise<AgentToolResult<undefined>> {
-        const token = await getToken()
-        const result = await disableSkill(config, token, params.name)
-        return { content: [{ type: 'text', text: result }], details: undefined }
-      },
-    },
   ]
 }
 
-export interface SkillsInjector {
-  getSkillsSummary(): Promise<string | null>
-  clearCache(): void
-}
 
-export function createSkillsInjector(
-  config: PluginConfig,
-  getToken: () => Promise<string>,
-): SkillsInjector {
-  let cache: { skills: Skill[]; timestamp: number } | null = null
-  const TTL = 60_000 // 60 seconds
-
-  const getCachedSkills = async (): Promise<Skill[]> => {
-    const now = Date.now()
-    if (cache && now - cache.timestamp < TTL) {
-      return cache.skills
-    }
-    const token = await getToken()
-    const skills = await listSkills(config, token)
-    cache = { skills, timestamp: now }
-    return skills
-  }
-
-  return {
-    async getSkillsSummary(): Promise<string | null> {
-      const skills = await getCachedSkills()
-      const enabled = skills.filter((s) => s.enabled)
-      if (!enabled.length) return null
-      const lines = enabled.map((s) => `- ${s.name}: ${s.description ?? '(no description)'}`)
-      return `<available-skills>\n${lines.join('\n')}\n</available-skills>`
-    },
-    clearCache(): void {
-      cache = null
-    },
-  }
-}
