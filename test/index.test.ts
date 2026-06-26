@@ -36,17 +36,17 @@ describe('extension entry point', () => {
     origFetch = globalThis.fetch
     globalThis.fetch = vi.fn() as unknown as typeof global.fetch
     delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
-    // Default: no cache — individual tests can override
     vi.doMock('../src/model-cache.js', () => ({
       loadModelCache: vi.fn().mockReturnValue(null),
       saveModelCache: vi.fn(),
     }))
-  })
-
-  afterEach(() => {
-    globalThis.fetch = origFetch
-    vi.restoreAllMocks()
-    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    vi.doMock('../src/skills-cache.js', () => ({
+      syncRemoteSkills: vi.fn().mockResolvedValue({ count: 0, names: [], errored: [] }),
+    }))
+    vi.doMock('@earendil-works/pi-ai', () => ({
+      createAssistantMessageEventStream: vi.fn(),
+      streamSimpleOpenAICompletions: vi.fn(),
+    }))
   })
 
   it('returns early when no config is available', async () => {
@@ -54,7 +54,6 @@ describe('extension entry point', () => {
       resolvePluginConfig: () => null,
       discoverModels: vi.fn(),
       discoverMcpTools: vi.fn(),
-      listSkills: vi.fn(),
       buildProviderConfig: vi.fn(),
     }))
 
@@ -69,13 +68,11 @@ describe('extension entry point', () => {
   it('registers provider after discovery', async () => {
     const mockModels = { 'gpt-4': { model_name: 'gpt-4' } }
     const mockMcpTools: unknown[] = []
-    const mockSkills: unknown[] = []
 
     vi.doMock('../src/litellm-api.js', () => ({
       resolvePluginConfig: () => mockConfig,
       discoverModels: vi.fn().mockResolvedValue(mockModels),
       discoverMcpTools: vi.fn().mockResolvedValue(mockMcpTools),
-      listSkills: vi.fn().mockResolvedValue(mockSkills),
       buildProviderConfig: vi.fn().mockReturnValue({ baseUrl: mockConfig.url, apiKey: mockConfig.apiKey, api: 'openai-completions', models: [] }),
     }))
 
@@ -91,7 +88,6 @@ describe('extension entry point', () => {
       resolvePluginConfig: () => mockConfig,
       discoverModels: vi.fn().mockRejectedValue(new Error('Access denied (403). Check your LiteLLM API key or contact your admin.')),
       discoverMcpTools: vi.fn().mockResolvedValue([]),
-      listSkills: vi.fn().mockResolvedValue([]),
       buildProviderConfig: vi.fn(),
     }))
 
@@ -109,7 +105,6 @@ describe('extension entry point', () => {
       resolvePluginConfig: () => mockConfig,
       discoverModels: vi.fn().mockResolvedValue({}),
       discoverMcpTools: vi.fn().mockRejectedValue(new Error('MCP error')),
-      listSkills: vi.fn().mockResolvedValue([]),
       buildProviderConfig: vi.fn(),
     }))
 
@@ -133,6 +128,13 @@ describe('discoverAndRegister', () => {
       loadModelCache: vi.fn().mockReturnValue(null),
       saveModelCache: vi.fn(),
     }))
+    vi.doMock('../src/skills-cache.js', () => ({
+      syncRemoteSkills: vi.fn().mockResolvedValue({ count: 0, names: [], errored: [] }),
+    }))
+    vi.doMock('@earendil-works/pi-ai', () => ({
+      createAssistantMessageEventStream: vi.fn(),
+      streamSimpleOpenAICompletions: vi.fn(),
+    }))
   })
 
   afterEach(() => {
@@ -147,7 +149,6 @@ describe('discoverAndRegister', () => {
       resolvePluginConfig: () => mockConfig,
       discoverModels: vi.fn().mockResolvedValue(mockModels),
       discoverMcpTools: vi.fn().mockResolvedValue([]),
-      listSkills: vi.fn().mockResolvedValue([]),
       buildProviderConfig: vi.fn().mockReturnValue({ baseUrl: mockConfig.url, apiKey: mockConfig.apiKey, api: 'openai-completions', models: [] }),
     }))
 
@@ -163,7 +164,6 @@ describe('discoverAndRegister', () => {
       resolvePluginConfig: () => mockConfig,
       discoverModels: vi.fn().mockRejectedValue(new Error('model error')),
       discoverMcpTools: vi.fn().mockResolvedValue([]),
-      listSkills: vi.fn().mockResolvedValue([]),
       buildProviderConfig: vi.fn(),
     }))
 
@@ -180,7 +180,6 @@ describe('discoverAndRegister', () => {
       resolvePluginConfig: () => mockConfig,
       discoverModels: vi.fn().mockResolvedValue({}),
       discoverMcpTools: vi.fn().mockRejectedValue(new Error('mcp error')),
-      listSkills: vi.fn().mockResolvedValue([]),
       buildProviderConfig: vi.fn(),
     }))
 

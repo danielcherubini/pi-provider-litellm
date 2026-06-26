@@ -40,34 +40,6 @@ export interface McpTool {
   input_schema: Record<string, unknown>
 }
 
-// Skill types from /claude-code/plugins
-export interface SkillSource {
-  source: string
-  url: string
-  path?: string
-}
-
-export interface Skill {
-  id: string
-  name: string
-  version: string
-  description: string | null
-  source: SkillSource
-  author: string | null
-  homepage: string | null
-  keywords: string | null
-  category: string | null
-  domain: string | null
-  namespace: string | null
-  enabled: boolean
-  created_at: string
-  updated_at: string
-}
-
-export interface SkillPluginsResponse {
-  plugins?: Skill[]
-}
-
 // Plugin config resolved from env or settings
 export interface PluginConfig {
   url: string
