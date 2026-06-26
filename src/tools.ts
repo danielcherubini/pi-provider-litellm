@@ -7,7 +7,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import type { McpTool, PluginConfig } from './types.js'
 import { executeMcpTool } from './litellm-api.js'
-import { getCachedSkillNames } from './skills-cache.js'
+import { getCachedSkillNames, getCachedSkillPath } from './skills-cache.js'
 
 export function sanitizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '_')
@@ -173,7 +173,10 @@ export function createSkillToolDefinitions(): ToolDefinition[] {
         }
         const header = '| Name | Local Path |'
         const sep = '|------|------------|'
-        const rows = names.map((name) => `| ${name} | ~/.pi/agent/skills/remote/${name}/SKILL.md |`)
+        const rows = names.map((name) => {
+          const resolved = getCachedSkillPath(name)
+          return `| ${name} | ${resolved ?? `~/.pi/agent/skills/remote/${name}/SKILL.md`} |`
+        })
         return {
           content: [{ type: 'text', text: [header, sep, ...rows].join('\n') }],
           details: undefined,
