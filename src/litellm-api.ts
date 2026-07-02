@@ -241,6 +241,45 @@ export function resolvePluginConfig(): PluginConfig | null {
   return null
 }
 
+/**
+ * Read the skills enabled flag from ~/.pi/agent/settings.json.
+ * Returns false if the file is missing, unreadable, or the flag is not explicitly true.
+ */
+export function readSkillsSetting(): boolean {
+  try {
+    const settingsPath = path.join(os.homedir(), '.pi', 'agent', 'settings.json')
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
+    const litellm = settings['litellm']
+    if (typeof litellm !== 'object' || litellm === null) return false
+    return (litellm as Record<string, unknown>)['skills'] === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Write the skills enabled flag to ~/.pi/agent/settings.json.
+ * Reads the existing file, merges the litellm.skills key, and writes it back.
+ * Preserves all other existing settings. Guards against non-object litellm value.
+ */
+export function writeSkillsSetting(enabled: boolean): void {
+  const settingsPath = path.join(os.homedir(), '.pi', 'agent', 'settings.json')
+  let settings: Record<string, unknown> = {}
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
+  } catch {
+    // File missing or unreadable — start fresh
+  }
+  const existing = settings['litellm']
+  const litellm: Record<string, unknown> =
+    typeof existing === 'object' && existing !== null
+      ? { ...(existing as Record<string, unknown>) }
+      : {}
+  settings['litellm'] = { ...litellm, skills: enabled }
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+}
+
 export function mapToProviderModel(info: LiteLLMModelInfo): ProviderModelConfig {
   const input: ('text' | 'image')[] = ['text']
   if (info.supports_vision) {

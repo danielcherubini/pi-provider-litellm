@@ -1,6 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mapToProviderModel, resolvePluginConfig, buildProviderConfig } from '../src/litellm-api.js'
+import { mapToProviderModel, resolvePluginConfig, buildProviderConfig, readSkillsSetting, writeSkillsSetting } from '../src/litellm-api.js'
 import type { LiteLLMModelInfo } from '../src/types.js'
+
+const mockReadFileSync = vi.hoisted(() => vi.fn())
+const mockWriteFileSync = vi.hoisted(() => vi.fn())
+const mockMkdirSync = vi.hoisted(() => vi.fn())
+
+vi.mock('node:fs', () => ({
+  default: {
+    get readFileSync() { return mockReadFileSync },
+    get writeFileSync() { return mockWriteFileSync },
+    get mkdirSync() { return mockMkdirSync },
+  },
+}))
 
 describe('mapToProviderModel', () => {
   it('includes image in input for vision models', () => {
@@ -109,6 +121,88 @@ describe('resolvePluginConfig', () => {
       apiKey: 'env-key',
       providerId: 'custom-provider',
     })
+  })
+})
+
+describe('readSkillsSetting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns false when settings.json does not exist', () => {
+    mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT') })
+    expect(readSkillsSetting()).toBe(false)
+  })
+
+  it('returns false when litellm key is missing', () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ defaultModel: 'gpt-4' }))
+    expect(readSkillsSetting()).toBe(false)
+  })
+
+  it('returns false when litellm.skills is false', () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ litellm: { skills: false } }))
+    expect(readSkillsSetting()).toBe(false)
+  })
+
+  it('returns true when litellm.skills is true', () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ litellm: { skills: true } }))
+    expect(readSkillsSetting()).toBe(true)
+  })
+
+  it('returns false when litellm.skills is a non-boolean truthy value', () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ litellm: { skills: 'yes' } }))
+    expect(readSkillsSetting()).toBe(false)
+    mockReadFileSync.mockReturnValue(JSON.stringify({ litellm: { skills: 1 } }))
+    expect(readSkillsSetting()).toBe(false)
+  })
+
+  it('returns false when litellm is a non-object value', () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ litellm: 'enabled' }))
+    expect(readSkillsSetting()).toBe(false)
+  })
+})
+
+describe('writeSkillsSetting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function writtenSettings(): Record<string, unknown> {
+    const call = mockWriteFileSync.mock.calls[0]
+    return JSON.parse(call[1] as string) as Record<string, unknown>
+  }
+
+  it('creates settings.json with litellm.skills true when file does not exist', () => {
+    mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT') })
+    writeSkillsSetting(true)
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1)
+    expect(writtenSettings()).toEqual({ litellm: { skills: true } })
+  })
+
+  it('merges into existing settings without clobbering other top-level keys', () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ defaultModel: 'gpt-4' }))
+    writeSkillsSetting(true)
+    const result = writtenSettings()
+    expect(result.defaultModel).toBe('gpt-4')
+    expect(result.litellm).toEqual({ skills: true })
+  })
+
+  it('preserves other keys inside an existing litellm object', () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ litellm: { timeout: 5000 } }))
+    writeSkillsSetting(true)
+    expect(writtenSettings().litellm).toEqual({ timeout: 5000, skills: true })
+  })
+
+  it('can set skills to false', () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ litellm: { skills: true } }))
+    writeSkillsSetting(false)
+    expect(writtenSettings().litellm).toEqual({ skills: false })
+  })
+
+  it('handles malformed litellm value by replacing it', () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ litellm: 'enabled' }))
+    expect(() => writeSkillsSetting(true)).not.toThrow()
+    expect(writtenSettings().litellm).toEqual({ skills: true })
   })
 })
 
