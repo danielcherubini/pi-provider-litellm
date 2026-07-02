@@ -1,5 +1,5 @@
 import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult } from '@earendil-works/pi-coding-agent'
-import { resolvePluginConfig, discoverModels, discoverMcpTools, buildProviderConfig } from './litellm-api.js'
+import { resolvePluginConfig, discoverModels, discoverMcpTools, buildProviderConfig, readSkillsSetting } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions } from './tools.js'
 import { getGcloudToken } from './gcloud-token.js'
 import { loadModelCache, saveModelCache } from './model-cache.js'
@@ -61,14 +61,20 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // Token refresh timer — cleared on session_shutdown to avoid stale context errors.
   let refreshTimer: ReturnType<typeof setInterval> | undefined
 
+  // Read the skills enabled flag once for startup. Both the remote skills sync
+  // and the skill_list tool registration are gated behind this setting.
+  const skillsEnabled = readSkillsSetting()
+
   // Sync remote skills to local cache so pi discovers them natively.
   // Pi scans ~/.pi/agent/skills/ and picks up skills from the remote/ subdirectory.
-  await syncRemoteSkills(config.url, getToken, (msg) => console.log(msg))
+  if (skillsEnabled) {
+    await syncRemoteSkills(config.url, getToken, (msg) => console.log(msg))
+  }
 
   // Await discovery so PI blocks until models are registered before resolving
   // model patterns. Cache is loaded at the top of discoverAndRegister so the
   // first call returns quickly on subsequent startups.
-  await discoverAndRegister(pi, config, getToken, streamSimple, registeredTools)
+  await discoverAndRegister(pi, config, getToken, streamSimple, registeredTools, skillsEnabled)
 
   pi.on('session_start', async (_event, ctx) => {
     // Assign a stable session ID so all requests in this pi session are grouped
@@ -76,7 +82,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     // getSessionId() returns the UUID from the session header directly.
     setSessionId(ctx.sessionManager.getSessionId() ?? crypto.randomUUID())
 
-    await discoverAndRegister(pi, config, getToken, streamSimple, registeredTools)
+    // Re-read the setting fresh each time so enabling skills via /litellm-skills on
+    // during a session is picked up on the next session_start.
+    const sessionSkillsEnabled = readSkillsSetting()
+    await discoverAndRegister(pi, config, getToken, streamSimple, registeredTools, sessionSkillsEnabled)
   })
 
   pi.on('session_shutdown', async (_event, _ctx) => {
@@ -126,6 +135,7 @@ export async function discoverAndRegister(
   getToken: () => Promise<string>,
   streamSimple?: StreamSimpleFn,
   registeredTools?: Set<string>,
+  skillsEnabled?: boolean,
 ): Promise<void> {
   // Fetch one token up-front and reuse it for all registrations in this call.
   const token = await getToken()
@@ -188,11 +198,13 @@ export async function discoverAndRegister(
     console.warn(`${LOG} MCP tool discovery failed: ${mcpResult.reason}`)
   }
 
-  const skillTools = createSkillToolDefinitions()
-  for (const tool of skillTools) {
-    if (!registeredTools || !registeredTools.has(tool.name)) {
-      pi.registerTool(tool)
-      registeredTools?.add(tool.name)
+  if (skillsEnabled) {
+    const skillTools = createSkillToolDefinitions()
+    for (const tool of skillTools) {
+      if (!registeredTools || !registeredTools.has(tool.name)) {
+        pi.registerTool(tool)
+        registeredTools?.add(tool.name)
+      }
     }
   }
 }
