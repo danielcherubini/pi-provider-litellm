@@ -1,11 +1,11 @@
 import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult } from '@earendil-works/pi-coding-agent'
-import { resolvePluginConfig, discoverModels, discoverMcpTools, buildProviderConfig, readSkillsSetting } from './litellm-api.js'
+import { resolvePluginConfig, discoverModels, discoverMcpTools, buildProviderConfig, readSkillsSetting, writeSkillsSetting } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions } from './tools.js'
 import { getGcloudToken } from './gcloud-token.js'
 import { loadModelCache, saveModelCache } from './model-cache.js'
 import { createGcloudStreamSimple, setSessionId } from './stream-simple.js'
 import type { LiteLLMModelInfo, McpTool, PluginConfig, StreamSimpleFn } from './types.js'
-import { syncRemoteSkills } from './skills-cache.js'
+import { syncRemoteSkills, clearSkillsCache, getCachedSkillNames, getCacheAgeMinutes } from './skills-cache.js'
 
 const LOG = '[pi-provider-litellm]'
 // Re-register the provider every 45 minutes to pick up a fresh gcloud OAuth token
@@ -127,6 +127,46 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       refreshTimer.unref()
     }
   }
+
+  pi.registerCommand('litellm-skills', {
+    description: 'Toggle remote skill syncing: on | off | status',
+    handler: async (args: string, ctx) => {
+      const sub = args.trim().toLowerCase()
+
+      if (sub === 'on') {
+        writeSkillsSetting(true)
+        ctx.ui.notify('Skills enabled — syncing now…', 'info')
+        await syncRemoteSkills(config.url, getToken, (msg) => console.log(msg))
+        const names = getCachedSkillNames()
+        ctx.ui.notify(`Skills ready: ${names.length} skills cached`, 'info')
+        return
+      }
+
+      if (sub === 'off') {
+        writeSkillsSetting(false)
+        clearSkillsCache()
+        ctx.ui.notify('Skills disabled — cache cleared. The skill_list tool will be removed on next restart.', 'info')
+        return
+      }
+
+      if (sub === 'status') {
+        const enabled = readSkillsSetting()
+        const names = getCachedSkillNames()
+        const ageMin = getCacheAgeMinutes()
+        const ageStr = ageMin !== null ? `${ageMin}m ago` : 'n/a'
+        const lines = [
+          `Skills: ${enabled ? '✅ enabled' : '❌ disabled'}`,
+          `Cached skills: ${names.length}`,
+          `Cache age: ${ageStr}`,
+        ]
+        ctx.ui.notify(lines.join('\n'), 'info')
+        return
+      }
+
+      // No args or unrecognised
+      ctx.ui.notify('Usage: /litellm-skills on | off | status', 'info')
+    },
+  })
 }
 
 export async function discoverAndRegister(

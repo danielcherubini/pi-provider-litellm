@@ -15,6 +15,7 @@ function createMockPi(): MockPi {
     registerProvider: vi.fn(),
     unregisterProvider: vi.fn(),
     registerTool: vi.fn(),
+    registerCommand: vi.fn(),
     handlers,
   }
 }
@@ -24,6 +25,7 @@ interface MockPi {
   registerProvider: ReturnType<typeof vi.fn>
   unregisterProvider: ReturnType<typeof vi.fn>
   registerTool: ReturnType<typeof vi.fn>
+  registerCommand: ReturnType<typeof vi.fn>
   handlers: Record<string, Function[]>
 }
 
@@ -42,6 +44,9 @@ describe('extension entry point', () => {
     }))
     vi.doMock('../src/skills-cache.js', () => ({
       syncRemoteSkills: vi.fn().mockResolvedValue({ count: 0, names: [], errored: [] }),
+      clearSkillsCache: vi.fn(),
+      getCachedSkillNames: vi.fn().mockReturnValue([]),
+      getCacheAgeMinutes: vi.fn().mockReturnValue(null),
     }))
     vi.doMock('@earendil-works/pi-ai', () => ({
       createAssistantMessageEventStream: vi.fn(),
@@ -139,7 +144,12 @@ describe('extension entry point', () => {
 
   it('does not sync remote skills when skills are disabled', async () => {
     const syncMock = vi.fn().mockResolvedValue({ count: 0, names: [], errored: [] })
-    vi.doMock('../src/skills-cache.js', () => ({ syncRemoteSkills: syncMock }))
+    vi.doMock('../src/skills-cache.js', () => ({
+      syncRemoteSkills: syncMock,
+      clearSkillsCache: vi.fn(),
+      getCachedSkillNames: vi.fn().mockReturnValue([]),
+      getCacheAgeMinutes: vi.fn().mockReturnValue(null),
+    }))
     vi.doMock('../src/litellm-api.js', () => ({
       resolvePluginConfig: () => mockConfig,
       discoverModels: vi.fn().mockResolvedValue({}),
@@ -158,7 +168,12 @@ describe('extension entry point', () => {
 
   it('syncs remote skills when skills are enabled', async () => {
     const syncMock = vi.fn().mockResolvedValue({ count: 0, names: [], errored: [] })
-    vi.doMock('../src/skills-cache.js', () => ({ syncRemoteSkills: syncMock }))
+    vi.doMock('../src/skills-cache.js', () => ({
+      syncRemoteSkills: syncMock,
+      clearSkillsCache: vi.fn(),
+      getCachedSkillNames: vi.fn().mockReturnValue([]),
+      getCacheAgeMinutes: vi.fn().mockReturnValue(null),
+    }))
     vi.doMock('../src/litellm-api.js', () => ({
       resolvePluginConfig: () => mockConfig,
       discoverModels: vi.fn().mockResolvedValue({}),
@@ -189,6 +204,9 @@ describe('discoverAndRegister', () => {
     }))
     vi.doMock('../src/skills-cache.js', () => ({
       syncRemoteSkills: vi.fn().mockResolvedValue({ count: 0, names: [], errored: [] }),
+      clearSkillsCache: vi.fn(),
+      getCachedSkillNames: vi.fn().mockReturnValue([]),
+      getCacheAgeMinutes: vi.fn().mockReturnValue(null),
     }))
     vi.doMock('@earendil-works/pi-ai', () => ({
       createAssistantMessageEventStream: vi.fn(),
