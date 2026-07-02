@@ -208,3 +208,27 @@ export function getCachedSkillPath(name: string): string | null {
   const filePath = path.join(CACHE_DIR, name, 'SKILL.md')
   return fs.existsSync(filePath) ? filePath : null
 }
+
+/**
+ * Delete all cached remote skills from disk.
+ * Called when the user disables the skills feature via /litellm-skills off.
+ */
+export function clearSkillsCache(): void {
+  if (fs.existsSync(CACHE_DIR)) {
+    fs.rmSync(CACHE_DIR, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Return the age of the skills cache in minutes, or null if no cache exists.
+ * Used by the /litellm-skills status command.
+ */
+export function getCacheAgeMinutes(): number | null {
+  try {
+    if (!fs.existsSync(CACHE_META)) return null
+    const meta = JSON.parse(fs.readFileSync(CACHE_META, 'utf-8')) as CacheMeta
+    return Math.round((Date.now() - meta.timestamp) / 60000)
+  } catch {
+    return null
+  }
+}
