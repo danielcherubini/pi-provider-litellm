@@ -3,8 +3,8 @@
 ## Quick Stats
 
 - **Total Plans:** 2
-- **In Progress:** 1
-- **Completed:** 1
+- **In Progress:** 0
+- **Completed:** 2
 
 ---
 
@@ -12,7 +12,7 @@
 
 | Plan | Status |
 |------|--------|
-| [2026-07-02: Skills Toggle](2026-07-02-skills-toggle.md) | 🚧 IN PROGRESS |
+| [2026-07-02: Skills Toggle](2026-07-02-skills-toggle.md) | ✅ COMPLETED ([#5](https://github.com/danielcherubini/pi-provider-litellm/pull/5)) |
 
 ---
 
