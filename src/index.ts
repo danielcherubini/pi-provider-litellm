@@ -137,6 +137,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         writeSkillsSetting(true)
         ctx.ui.notify('Skills enabled — syncing now…', 'info')
         await syncRemoteSkills(config.url, getToken, (msg) => console.log(msg))
+        // Register the skill_list tool immediately so it's available without restart
+        await discoverAndRegister(pi, config, getToken, streamSimple, registeredTools, true)
         const names = getCachedSkillNames()
         ctx.ui.notify(`Skills ready: ${names.length} skills cached`, 'info')
         return
