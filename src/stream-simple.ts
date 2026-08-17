@@ -1,10 +1,8 @@
 // @earendil-works/pi-ai is available at runtime inside pi's process.
 // It is also installed as a devDependency (file: reference) for local type-checking.
+import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import {
   createAssistantMessageEventStream,
-  // Use the concrete streamer — the generic `streamSimple` resolves via the
-  // global registry which our plugin replaces, causing infinite recursion.
-  streamSimpleOpenAICompletions,
   type AssistantMessageEventStream,
   type Context,
   type Model,
@@ -64,7 +62,7 @@ export function createGcloudStreamSimple(
     // Other plugins (e.g., pi-provider-tama) also use `api: 'openai-completions'`
     // and would break if forced through gcloud token refresh.
     if (model.provider !== providerId) {
-      return streamSimpleOpenAICompletions(model as Model<'openai-completions'>, context, options);
+      return openAICompletionsApi().streamSimple(model as Model<'openai-completions'>, context, options);
     }
 
     // Inject x-litellm-session-id so LiteLLM groups all turns of this pi session
@@ -103,7 +101,7 @@ export function createGcloudStreamSimple(
       const runStream = async (token: string): Promise<'ok' | '401'> => {
         let httpStatus = 0
 
-        const inner = streamSimpleOpenAICompletions(model as Model<'openai-completions'>, context, {
+        const inner = openAICompletionsApi().streamSimple(model as Model<'openai-completions'>, context, {
           ...mergedOptions,
           apiKey: token,
           onResponse: async (res: { status: number; headers: Record<string, string> }, m: Model<Api>) => {
