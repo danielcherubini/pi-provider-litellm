@@ -30,15 +30,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     return config.apiKey
   }
 
-  // Re-register the provider with a fresh token (used by the streamSimple 401 handler)
-  // TODO(task5): replaced by auth.resolve() in buildNativeProvider — remove this stub
-  const reregister = (_token: string): void => { /* stub — removed in task 5 */ }
-
   // In gcloud mode, use a custom streamSimple that fetches a fresh token on every call
   // and retries with a force-refreshed token on 401 errors.
   // Pass providerId so the handler only applies gcloud logic to litellm's own models.
   const streamSimple: StreamSimpleFn | undefined = isGcloudAuth
-    ? createGcloudStreamSimple(getToken, reregister, config.providerId)
+    ? createGcloudStreamSimple(getToken, config.providerId)
     : undefined
 
   // Track which tools have been registered to avoid duplicates across session restarts.

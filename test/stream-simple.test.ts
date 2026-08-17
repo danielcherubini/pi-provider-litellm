@@ -77,11 +77,9 @@ describe('createGcloudStreamSimple', () => {
   const fakeContext = { systemPrompt: '', messages: [], tools: [] } as any
 
   let getToken: ReturnType<typeof vi.fn>
-  let reregister: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     getToken = vi.fn().mockResolvedValue('token-1')
-    reregister = vi.fn()
     mockStreamSimple.mockReset()
     mockResetTokenCache.mockReset()
   })
@@ -90,7 +88,7 @@ describe('createGcloudStreamSimple', () => {
     const inner = createFakeStream()
     mockStreamSimple.mockReturnValue(inner)
 
-    const streamSimple = createGcloudStreamSimple(getToken, reregister, PROVIDER_ID)
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID)
     const outer = streamSimple(fakeModel, fakeContext)
 
     // Push events through the inner stream
@@ -110,7 +108,7 @@ describe('createGcloudStreamSimple', () => {
     const inner = createFakeStream()
     mockStreamSimple.mockReturnValue(inner)
 
-    const streamSimple = createGcloudStreamSimple(getToken, reregister, PROVIDER_ID)
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID)
     streamSimple(fakeModel, fakeContext)
 
     // Let the async IIFE run
@@ -140,7 +138,7 @@ describe('createGcloudStreamSimple', () => {
       .mockReturnValueOnce(inner1)
       .mockReturnValueOnce(inner2)
 
-    const streamSimple = createGcloudStreamSimple(getToken, reregister, PROVIDER_ID)
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID)
     const outer = streamSimple(fakeModel, fakeContext)
 
     // Simulate 401 on first stream
@@ -160,9 +158,8 @@ describe('createGcloudStreamSimple', () => {
     expect((events[0] as any).type).toBe('start')
     expect((events[1] as any).type).toBe('done')
 
-    // Verify token cache was reset and provider re-registered
+    // Verify token cache was reset and retried
     expect(mockResetTokenCache).toHaveBeenCalled()
-    expect(reregister).toHaveBeenCalledWith('token-2')
     // Two calls to streamSimpleOpenAICompletions
     expect(mockStreamSimple).toHaveBeenCalledTimes(2)
   })
@@ -171,7 +168,7 @@ describe('createGcloudStreamSimple', () => {
     const inner = createFakeStream()
     mockStreamSimple.mockReturnValue(inner)
 
-    const streamSimple = createGcloudStreamSimple(getToken, reregister, PROVIDER_ID)
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID)
     const outer = streamSimple(fakeModel, fakeContext)
 
     inner.push({ type: 'error', reason: 'error', error: { errorMessage: 'rate limit exceeded' } })
@@ -195,7 +192,7 @@ describe('createGcloudStreamSimple', () => {
       .mockResolvedValueOnce('token-1')
       .mockResolvedValueOnce('') // empty token on refresh
 
-    const streamSimple = createGcloudStreamSimple(getToken, reregister, PROVIDER_ID)
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID)
     const outer = streamSimple(fakeModel, fakeContext)
 
     inner.push({ type: 'error', reason: 'error', error: { errorMessage: '401 Unauthorized' } })
@@ -219,7 +216,7 @@ describe('createGcloudStreamSimple', () => {
       .mockReturnValueOnce(inner1)
       .mockReturnValueOnce(inner2)
 
-    const streamSimple = createGcloudStreamSimple(getToken, reregister, PROVIDER_ID)
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID)
     const outer = streamSimple(fakeModel, fakeContext)
 
     // First 401
@@ -241,7 +238,7 @@ describe('createGcloudStreamSimple', () => {
   it('emits error when getToken throws', async () => {
     getToken.mockRejectedValue(new Error('credential file missing'))
 
-    const streamSimple = createGcloudStreamSimple(getToken, reregister, PROVIDER_ID)
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID)
     const outer = streamSimple(fakeModel, fakeContext)
 
     const events = await collectEvents(outer as any)

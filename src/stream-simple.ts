@@ -39,19 +39,17 @@ export function getSessionId(): string | undefined {
  *    so this is essentially free within the window).
  * 2. Delegates to pi-ai's openai-completions streamer directly, injecting the fresh token
  *    via options.apiKey (the handler checks options.apiKey first, before the static key).
- * 3. On a 401 / auth error, force-refreshes the token, re-registers the provider, and retries once.
+ * 3. On a 401 / auth error, force-refreshes the token and retries once.
  *
  * For non-litellm providers (e.g., tama), delegates directly to the standard OpenAI
  * completions streamer without gcloud token logic. This avoids interfering with other
  * plugins that also use `api: 'openai-completions'`.
  *
  * @param getToken      Returns a fresh gcloud/static token
- * @param reregister    Calls pi.registerProvider with the new token so future requests also work
  * @param providerId    The litellm provider ID (default 'litellm') — used to scope gcloud logic
  */
 export function createGcloudStreamSimple(
   getToken: () => Promise<string>,
-  reregister: (token: string) => void,
   providerId: string = 'litellm',
 ): StreamSimpleFn {
 
@@ -161,9 +159,7 @@ export function createGcloudStreamSimple(
             return
           }
 
-          console.warn(`${LOG} Got fresh token, re-registering provider and retrying request`)
-          // Re-register so the static provider config is also updated for future requests
-          reregister(freshToken)
+          console.warn(`${LOG} Got fresh token, retrying request`)
 
           const retryResult = await runStream(freshToken)
           if (retryResult === '401') {
