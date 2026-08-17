@@ -1,15 +1,12 @@
-import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult } from '@earendil-works/pi-coding-agent'
-import { resolvePluginConfig, discoverModels, discoverMcpTools, buildProviderConfig, readSkillsSetting, writeSkillsSetting } from './litellm-api.js'
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import { resolvePluginConfig, discoverMcpTools, buildNativeProvider, readSkillsSetting, writeSkillsSetting } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions } from './tools.js'
 import { getGcloudToken } from './gcloud-token.js'
 import { createGcloudStreamSimple, setSessionId } from './stream-simple.js'
-import type { LiteLLMModelInfo, McpTool, PluginConfig, StreamSimpleFn } from './types.js'
+import type { McpTool, PluginConfig, StreamSimpleFn } from './types.js'
 import { syncRemoteSkills, clearSkillsCache, getCachedSkillNames, getCacheAgeMinutes } from './skills-cache.js'
 
 const LOG = '[pi-provider-litellm]'
-// Re-register the provider every 45 minutes to pick up a fresh gcloud OAuth token
-// (Google OAuth tokens expire after ~60 minutes)
-const TOKEN_REFRESH_INTERVAL_MS = 45 * 60 * 1000
 
 export default async function (pi: ExtensionAPI): Promise<void> {
   const config = resolvePluginConfig()
@@ -22,7 +19,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
     process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0')
 
-  // When gcloud token auth is enabled, fetch a live token instead of using the static apiKey
+  // When gcloud token auth is enabled, fetch a live token instead of using the static apiKey.
+  // auth.apiKey.resolve() in buildNativeProvider calls getToken() per-request — no timer needed.
   const getToken = async (): Promise<string> => {
     if (isGcloudAuth) {
       return (await getGcloudToken()) ?? ''
@@ -40,9 +38,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // Track which tools have been registered to avoid duplicates across session restarts.
   const registeredTools = new Set<string>()
 
-  // Token refresh timer — cleared on session_shutdown to avoid stale context errors.
-  let refreshTimer: ReturnType<typeof setInterval> | undefined
-
   // Read the skills enabled flag once for startup. Both the remote skills sync
   // and the skill_list tool registration are gated behind this setting.
   const skillsEnabled = readSkillsSetting()
@@ -53,57 +48,29 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     await syncRemoteSkills(config.url, getToken, (msg) => console.log(msg))
   }
 
-  // Await discovery so PI blocks until models are registered before resolving
-  // model patterns. Cache is loaded at the top of discoverAndRegister so the
-  // first call returns quickly on subsequent startups.
-  await discoverAndRegister(pi, config, getToken, streamSimple, registeredTools, skillsEnabled)
+  // Register the native provider — pi owns the model cache and refresh lifecycle.
+  // fetchModels is called by pi on startup (restoring from models-store.json) and on refresh.
+  // auth.apiKey.resolve() is called per-request so gcloud tokens stay fresh automatically.
+  const provider = buildNativeProvider(config, isGcloudAuth, getToken, streamSimple)
+  pi.registerProvider(provider)
+
+  // Initial MCP tool and skills discovery
+  await discoverAndRegisterTools(pi, config, getToken, registeredTools, skillsEnabled)
 
   pi.on('session_start', async (_event, ctx) => {
     // Assign a stable session ID so all requests in this pi session are grouped
     // under one conversation in the LiteLLM logs — mirroring Claude Code behaviour.
-    // getSessionId() returns the UUID from the session header directly.
     setSessionId(ctx.sessionManager.getSessionId() ?? crypto.randomUUID())
 
     // Re-read the setting fresh each time so enabling skills via /litellm-skills on
     // during a session is picked up on the next session_start.
     const sessionSkillsEnabled = readSkillsSetting()
-    await discoverAndRegister(pi, config, getToken, streamSimple, registeredTools, sessionSkillsEnabled)
+    await discoverAndRegisterTools(pi, config, getToken, registeredTools, sessionSkillsEnabled)
   })
 
   pi.on('session_shutdown', async (_event, _ctx) => {
     setSessionId(undefined)
-    // Stop the token refresh timer — the captured pi context will be stale
-    // after session replacement/reload, so continuing to fire would throw.
-    if (refreshTimer) {
-      clearInterval(refreshTimer)
-      refreshTimer = undefined
-    }
   })
-
-  // Periodically refresh the provider registration with a fresh token.
-  // Google OAuth access tokens expire after ~60 minutes, so we re-register
-  // every 45 minutes to stay ahead of expiry. The streamSimple handler also
-  // handles reactive 401 recovery on each individual request.
-  if (isGcloudAuth) {
-    refreshTimer = setInterval(async () => {
-      try {
-        // TODO(task5): token refresh timer removed in task 5 (auth.resolve() handles this)
-        await getToken()  // no-op stub
-      } catch (err) {
-        // Ignore stale context errors — the session was replaced and this timer
-        // will be cleared shortly, or a new one will be set up in session_start.
-        const msg = String(err)
-        if (!msg.includes('stale')) {
-          console.warn(`${LOG} Token refresh failed: ${err}`)
-        }
-      }
-    }, TOKEN_REFRESH_INTERVAL_MS)
-
-    // Ensure the timer doesn't keep the process alive if PI shuts down
-    if (refreshTimer.unref) {
-      refreshTimer.unref()
-    }
-  }
 
   pi.registerCommand('litellm-skills', {
     description: 'Toggle remote skill syncing: on | off | status',
@@ -115,7 +82,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         ctx.ui.notify('Skills enabled — syncing now…', 'info')
         await syncRemoteSkills(config.url, getToken, (msg) => console.log(msg))
         // Register the skill_list tool immediately so it's available without restart
-        await discoverAndRegister(pi, config, getToken, streamSimple, registeredTools, true)
+        await discoverAndRegisterTools(pi, config, getToken, registeredTools, true)
         const names = getCachedSkillNames()
         ctx.ui.notify(`Skills ready: ${names.length} skills cached`, 'info')
         return
@@ -148,58 +115,34 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   })
 }
 
-export async function discoverAndRegister(
+/**
+ * Discover MCP tools and skills and register them with pi.
+ * Called at startup and on session_start. Model discovery is handled by pi
+ * via the createProvider fetchModels callback — not called here.
+ */
+export async function discoverAndRegisterTools(
   pi: ExtensionAPI,
   config: PluginConfig,
   getToken: () => Promise<string>,
-  streamSimple?: StreamSimpleFn,
   registeredTools?: Set<string>,
   skillsEnabled?: boolean,
 ): Promise<void> {
-  // Fetch one token up-front and reuse it for all registrations in this call.
   const token = await getToken()
 
-  // TODO(task5): cache-first registration replaced by createProvider fetchModels in task 5
-  // (loadModelCache removed — stub for now)
-
   const DISCOVERY_TIMEOUT_MS = 30_000
-
-  let modelsResult: PromiseSettledResult<Record<string, LiteLLMModelInfo>>
   let mcpResult: PromiseSettledResult<McpTool[]>
 
-  const controller = new AbortController()
-  const timeoutTimer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT_MS)
+  const timeoutTimer = setTimeout(() => {}, DISCOVERY_TIMEOUT_MS) // placeholder for signal
 
   try {
     const results = await Promise.allSettled([
-      discoverModels(config, token),
       discoverMcpTools(config, token),
     ])
-
-    const settledResults = results as [
-      PromiseSettledResult<Record<string, LiteLLMModelInfo>>,
-      PromiseSettledResult<McpTool[]>,
-    ]
-    modelsResult = settledResults[0]
-    mcpResult = settledResults[1]
+    mcpResult = results[0] as PromiseSettledResult<McpTool[]>
   } catch (error) {
-    modelsResult = { status: 'rejected', reason: error as Error }
     mcpResult = { status: 'rejected', reason: error as Error }
   } finally {
     clearTimeout(timeoutTimer)
-  }
-
-  if (modelsResult.status === 'fulfilled') {
-    const modelCount = Object.keys(modelsResult.value).length
-    if (modelCount > 0) {
-      // TODO(task5): saveModelCache removed — pi owns persistence via createProvider
-      const providerConfig = buildProviderConfig(config.url, token, modelsResult.value, streamSimple)
-      pi.registerProvider(config.providerId, providerConfig)
-    } else {
-      console.warn(`${LOG} No models discovered — check LiteLLM /v1/model/info endpoint (URL: ${config.url})`)
-    }
-  } else {
-    console.error(`${LOG} Model discovery error: ${modelsResult.reason}`)
   }
 
   if (mcpResult.status === 'fulfilled') {
