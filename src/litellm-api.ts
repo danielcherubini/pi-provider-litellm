@@ -1,6 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
+import type { ProviderConfig } from '@earendil-works/pi-coding-agent'
 import type {
   LiteLLMHealthModel,
   LiteLLMHealthResponse,
@@ -8,7 +9,6 @@ import type {
   McpTool,
   PluginConfig,
   ProviderModelConfig,
-  ProviderConfig,
   StreamSimpleFn,
 } from './types.js'
 

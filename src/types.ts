@@ -1,9 +1,10 @@
-import type { ProviderModelConfig, ProviderConfig } from '@earendil-works/pi-coding-agent'
+import type { ProviderModelConfig } from '@earendil-works/pi-coding-agent'
+import type { ProviderStreams } from '@earendil-works/pi-ai'
 
-export type { ProviderModelConfig, ProviderConfig }
+export type { ProviderModelConfig }
 
-/** The streamSimple signature as expected by pi's ProviderConfig. */
-export type StreamSimpleFn = NonNullable<ProviderConfig['streamSimple']>
+/** The streamSimple signature as expected by pi's ProviderStreams. */
+export type StreamSimpleFn = ProviderStreams['streamSimple']
 
 // LiteLLM /health endpoint response
 export interface LiteLLMHealthModel {
