@@ -45,7 +45,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // Sync remote skills to local cache so pi discovers them natively.
   // Pi scans ~/.pi/agent/skills/ and picks up skills from the remote/ subdirectory.
   if (skillsEnabled) {
-    await syncRemoteSkills(config.url, getToken, (msg) => console.log(msg))
+    await syncRemoteSkills(config.url, getToken, () => {}) // silent on startup
   }
 
   // Register the native provider — pi owns the model cache and refresh lifecycle.
