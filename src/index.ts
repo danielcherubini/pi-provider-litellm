@@ -129,11 +129,8 @@ export async function discoverAndRegisterTools(
 ): Promise<void> {
   const token = await getToken()
 
-  const DISCOVERY_TIMEOUT_MS = 30_000
+  // discoverMcpTools uses fetchJson internally which has its own 10s AbortController timeout
   let mcpResult: PromiseSettledResult<McpTool[]>
-
-  const timeoutTimer = setTimeout(() => {}, DISCOVERY_TIMEOUT_MS) // placeholder for signal
-
   try {
     const results = await Promise.allSettled([
       discoverMcpTools(config, token),
@@ -141,8 +138,6 @@ export async function discoverAndRegisterTools(
     mcpResult = results[0] as PromiseSettledResult<McpTool[]>
   } catch (error) {
     mcpResult = { status: 'rejected', reason: error as Error }
-  } finally {
-    clearTimeout(timeoutTimer)
   }
 
   if (mcpResult.status === 'fulfilled') {
