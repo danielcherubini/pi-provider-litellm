@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mapToProviderModel, resolvePluginConfig, buildProviderConfig, readSkillsSetting, writeSkillsSetting } from '../src/litellm-api.js'
-import type { LiteLLMModelInfo } from '../src/types.js'
+import { mapToProviderModel, resolvePluginConfig, buildNativeProvider, toNativeModel, readSkillsSetting, writeSkillsSetting } from '../src/litellm-api.js'
+import type { LiteLLMModelInfo, PluginConfig } from '../src/types.js'
 
 const mockReadFileSync = vi.hoisted(() => vi.fn())
 const mockWriteFileSync = vi.hoisted(() => vi.fn())
@@ -206,23 +206,45 @@ describe('writeSkillsSetting', () => {
   })
 })
 
-describe('buildProviderConfig', () => {
-  it('maps models and sets api to openai-completions', () => {
-    const models = {
-      'gpt-4': { model_name: 'gpt-4', max_tokens: 8192, supports_reasoning: true },
+describe('toNativeModel', () => {
+  it('sets required native Model fields', () => {
+    const pc = {
+      id: 'my-model',
+      name: 'My Model',
+      reasoning: false,
+      input: ['text'] as ('text' | 'image')[],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
     }
-    const config = buildProviderConfig('https://litellm.example.com', 'sk-test', models)
-
-    expect(config.api).toBe('openai-completions')
-    expect(config.baseUrl).toBe('https://litellm.example.com')
-    expect(config.apiKey).toBe('sk-test')
-    expect(config.models).toHaveLength(1)
-    expect(config.models![0].id).toBe('gpt-4')
-    expect(config.models![0].reasoning).toBe(true)
+    const model = toNativeModel(pc, 'litellm', 'http://localhost:4000')
+    expect(model.api).toBe('openai-completions')
+    expect(model.provider).toBe('litellm')
+    expect(model.baseUrl).toBe('http://localhost:4000')
+    expect(model.id).toBe('my-model')
+    expect(model.reasoning).toBe(false)
+    expect(model.contextWindow).toBe(128000)
+    expect(model.maxTokens).toBe(4096)
   })
 
-  it('handles empty models map', () => {
-    const config = buildProviderConfig('https://litellm.example.com', 'sk-test', {})
-    expect(config.models).toHaveLength(0)
+  it('omits compat when not set on ProviderModelConfig', () => {
+    const pc = {
+      id: 'x', name: 'x', reasoning: false, input: ['text'] as ('text' | 'image')[],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 0, maxTokens: 0,
+    }
+    const model = toNativeModel(pc, 'litellm', 'http://localhost:4000')
+    expect('compat' in model).toBe(false)
+  })
+})
+
+describe('buildNativeProvider', () => {
+  it('returns a Provider object with the correct id', () => {
+    const config: PluginConfig = { url: 'http://localhost:4000', apiKey: 'key', providerId: 'litellm' }
+    const provider = buildNativeProvider(config, false, () => Promise.resolve('key'))
+    expect(provider).toBeDefined()
+    expect(typeof provider).toBe('object')
+    // Provider should have an id property matching the providerId
+    expect((provider as any).id).toBe('litellm')
   })
 })

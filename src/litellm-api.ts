@@ -1,7 +1,9 @@
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
-import type { ProviderConfig } from '@earendil-works/pi-coding-agent'
+import { createProvider, type Provider } from '@earendil-works/pi-ai'
+import { openAICompletionsApi } from '@earendil-works/pi-ai/compat'
+import type { ProviderAuth, Model } from '@earendil-works/pi-ai'
 import type {
   LiteLLMHealthModel,
   LiteLLMHealthResponse,
@@ -306,19 +308,68 @@ export function mapToProviderModel(info: LiteLLMModelInfo): ProviderModelConfig 
   }
 }
 
-export function buildProviderConfig(
-  url: string,
-  apiKey: string,
-  models: Record<string, LiteLLMModelInfo>,
-  streamSimple?: StreamSimpleFn,
-): ProviderConfig {
-  const mappedModels = Object.values(models).map(mapToProviderModel)
-
+export function toNativeModel(
+  pc: ProviderModelConfig,
+  providerId: string,
+  baseUrl: string,
+): Model<'openai-completions'> {
   return {
-    baseUrl: url,
-    apiKey,
+    id: pc.id,
+    name: pc.name,
     api: 'openai-completions',
-    models: mappedModels,
-    ...(streamSimple ? { streamSimple } : {}),
+    provider: providerId,
+    baseUrl,
+    reasoning: pc.reasoning,
+    input: pc.input,
+    cost: pc.cost,
+    contextWindow: pc.contextWindow,
+    maxTokens: pc.maxTokens,
+    ...(pc.compat !== undefined ? { compat: pc.compat } : {}),
   }
+}
+
+export function buildNativeProvider(
+  config: PluginConfig,
+  isGcloudAuth: boolean,
+  getToken: () => Promise<string>,
+  streamSimple?: StreamSimpleFn,
+): Provider<'openai-completions'> {
+  const auth: ProviderAuth = {
+    apiKey: {
+      name: 'LiteLLM API key',
+      // resolve() is called per-request by pi to obtain the Bearer token.
+      // We intentionally ignore `input` — our auth is ambient (gcloud ADC or env var),
+      // not stored in pi's auth.json.
+      async resolve() {
+        const key = await getToken()
+        if (!key) return undefined
+        return {
+          auth: { apiKey: key },
+          source: isGcloudAuth ? 'gcloud ADC' : 'LITELLM_KEY',
+        }
+      },
+    },
+  }
+
+  const baseApi = openAICompletionsApi()
+  const api = streamSimple ? { ...baseApi, streamSimple } : baseApi
+
+  return createProvider({
+    id: config.providerId,
+    name: 'LiteLLM',
+    baseUrl: config.url,
+    auth,
+    models: [],
+    api,
+    fetchModels: async (context) => {
+      if (!context.allowNetwork) return []
+      // Prefer pi's resolved credential key if available; fall back to direct token fetch.
+      // Our resolve() is ambient-only so context.credential will typically be undefined.
+      const token = (context.credential as { key?: string } | undefined)?.key ?? await getToken()
+      const raw = await discoverModels(config, token)
+      return Object.values(raw).map(info =>
+        toNativeModel(mapToProviderModel(info), config.providerId, config.url)
+      )
+    },
+  })
 }
