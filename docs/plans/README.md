@@ -2,9 +2,9 @@
 
 ## Quick Stats
 
-- **Total Plans:** 2
+- **Total Plans:** 3
 - **In Progress:** 0
-- **Completed:** 2
+- **Completed:** 3
 
 ---
 
@@ -12,6 +12,7 @@
 
 | Plan | Status |
 |------|--------|
+| [plan-001: createProvider Migration](plan-001-createprovider-migration.md) | ✅ COMPLETED ([#6](https://github.com/danielcherubini/pi-provider-litellm/pull/6)) |
 | [2026-07-02: Skills Toggle](2026-07-02-skills-toggle.md) | ✅ COMPLETED ([#5](https://github.com/danielcherubini/pi-provider-litellm/pull/5)) |
 
 ---
