@@ -38,10 +38,6 @@ describe('extension entry point', () => {
     origFetch = globalThis.fetch
     globalThis.fetch = vi.fn() as unknown as typeof global.fetch
     delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
-    vi.doMock('../src/model-cache.js', () => ({
-      loadModelCache: vi.fn().mockReturnValue(null),
-      saveModelCache: vi.fn(),
-    }))
     vi.doMock('../src/skills-cache.js', () => ({
       syncRemoteSkills: vi.fn().mockResolvedValue({ count: 0, names: [], errored: [] }),
       clearSkillsCache: vi.fn(),
@@ -200,10 +196,6 @@ describe('discoverAndRegister', () => {
     vi.resetModules()
     origFetch = globalThis.fetch
     globalThis.fetch = vi.fn() as unknown as typeof global.fetch
-    vi.doMock('../src/model-cache.js', () => ({
-      loadModelCache: vi.fn().mockReturnValue(null),
-      saveModelCache: vi.fn(),
-    }))
     vi.doMock('../src/skills-cache.js', () => ({
       syncRemoteSkills: vi.fn().mockResolvedValue({ count: 0, names: [], errored: [] }),
       clearSkillsCache: vi.fn(),

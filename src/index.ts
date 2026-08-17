@@ -2,7 +2,6 @@ import type { ExtensionAPI, BeforeAgentStartEvent, BeforeAgentStartEventResult }
 import { resolvePluginConfig, discoverModels, discoverMcpTools, buildProviderConfig, readSkillsSetting, writeSkillsSetting } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions } from './tools.js'
 import { getGcloudToken } from './gcloud-token.js'
-import { loadModelCache, saveModelCache } from './model-cache.js'
 import { createGcloudStreamSimple, setSessionId } from './stream-simple.js'
 import type { LiteLLMModelInfo, McpTool, PluginConfig, StreamSimpleFn } from './types.js'
 import { syncRemoteSkills, clearSkillsCache, getCachedSkillNames, getCacheAgeMinutes } from './skills-cache.js'
@@ -32,21 +31,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   }
 
   // Re-register the provider with a fresh token (used by the streamSimple 401 handler)
-  // Wrapped in try-catch to silently ignore stale ctx errors after session reload.
-  const reregister = (token: string): void => {
-    try {
-      const models = loadModelCache(config.providerId)
-      if (models) {
-        pi.registerProvider(config.providerId, buildProviderConfig(config.url, token, models, streamSimple))
-      }
-    } catch (err) {
-      // Ignore stale context errors — nothing to do if the session was replaced
-      const msg = String(err)
-      if (!msg.includes('stale')) {
-        console.warn(`${LOG} Provider re-registration failed: ${err}`)
-      }
-    }
-  }
+  // TODO(task5): replaced by auth.resolve() in buildNativeProvider — remove this stub
+  const reregister = (_token: string): void => { /* stub — removed in task 5 */ }
 
   // In gcloud mode, use a custom streamSimple that fetches a fresh token on every call
   // and retries with a force-refreshed token on 401 errors.
@@ -105,13 +91,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   if (isGcloudAuth) {
     refreshTimer = setInterval(async () => {
       try {
-        const token = await getToken()
-        if (token) {
-          const models = loadModelCache(config.providerId)
-          if (models) {
-            pi.registerProvider(config.providerId, buildProviderConfig(config.url, token, models, streamSimple))
-          }
-        }
+        // TODO(task5): token refresh timer removed in task 5 (auth.resolve() handles this)
+        await getToken()  // no-op stub
       } catch (err) {
         // Ignore stale context errors — the session was replaced and this timer
         // will be cleared shortly, or a new one will be set up in session_start.
@@ -182,11 +163,8 @@ export async function discoverAndRegister(
   // Fetch one token up-front and reuse it for all registrations in this call.
   const token = await getToken()
 
-  // Register from cache before live discovery so models are visible immediately.
-  const cached = loadModelCache(config.providerId)
-  if (cached) {
-    pi.registerProvider(config.providerId, buildProviderConfig(config.url, token, cached, streamSimple))
-  }
+  // TODO(task5): cache-first registration replaced by createProvider fetchModels in task 5
+  // (loadModelCache removed — stub for now)
 
   const DISCOVERY_TIMEOUT_MS = 30_000
 
@@ -218,7 +196,7 @@ export async function discoverAndRegister(
   if (modelsResult.status === 'fulfilled') {
     const modelCount = Object.keys(modelsResult.value).length
     if (modelCount > 0) {
-      saveModelCache(config.providerId, modelsResult.value)
+      // TODO(task5): saveModelCache removed — pi owns persistence via createProvider
       const providerConfig = buildProviderConfig(config.url, token, modelsResult.value, streamSimple)
       pi.registerProvider(config.providerId, providerConfig)
     } else {
