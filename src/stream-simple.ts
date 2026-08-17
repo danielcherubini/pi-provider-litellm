@@ -1,6 +1,10 @@
 // @earendil-works/pi-ai is available at runtime inside pi's process.
 // It is also installed as a devDependency (file: reference) for local type-checking.
-import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
+// @earendil-works/pi-ai/compat is the compatibility entrypoint that re-exports
+// all legacy streaming helpers including streamSimpleOpenAICompletions.
+// At runtime, pi's extension loader resolves @earendil-works/pi-ai through compat.js
+// so this import works both for local tsc checks and inside pi's process.
+import { streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/compat'
 import {
   createAssistantMessageEventStream,
   type AssistantMessageEventStream,
@@ -62,7 +66,7 @@ export function createGcloudStreamSimple(
     // Other plugins (e.g., pi-provider-tama) also use `api: 'openai-completions'`
     // and would break if forced through gcloud token refresh.
     if (model.provider !== providerId) {
-      return openAICompletionsApi().streamSimple(model as Model<'openai-completions'>, context, options);
+      return streamSimpleOpenAICompletions(model as Model<'openai-completions'>, context, options);
     }
 
     // Inject x-litellm-session-id so LiteLLM groups all turns of this pi session
@@ -101,7 +105,7 @@ export function createGcloudStreamSimple(
       const runStream = async (token: string): Promise<'ok' | '401'> => {
         let httpStatus = 0
 
-        const inner = openAICompletionsApi().streamSimple(model as Model<'openai-completions'>, context, {
+        const inner = streamSimpleOpenAICompletions(model as Model<'openai-completions'>, context, {
           ...mergedOptions,
           apiKey: token,
           onResponse: async (res: { status: number; headers: Record<string, string> }, m: Model<Api>) => {

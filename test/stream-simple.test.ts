@@ -48,8 +48,8 @@ vi.mock('@earendil-works/pi-ai', () => ({
   createAssistantMessageEventStream: () => createFakeStream(),
 }))
 
-vi.mock('@earendil-works/pi-ai/api/openai-completions.lazy', () => ({
-  openAICompletionsApi: () => ({ streamSimple: mockStreamSimple }),
+vi.mock('@earendil-works/pi-ai/compat', () => ({
+  streamSimpleOpenAICompletions: mockStreamSimple,
 }))
 
 vi.mock('../src/gcloud-token.js', () => ({

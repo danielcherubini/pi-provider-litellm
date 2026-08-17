@@ -50,6 +50,8 @@ describe('extension entry point', () => {
     }))
     vi.doMock('@earendil-works/pi-ai', () => ({
       createAssistantMessageEventStream: vi.fn(),
+    }))
+    vi.doMock('@earendil-works/pi-ai/compat', () => ({
       streamSimpleOpenAICompletions: vi.fn(),
     }))
   })
@@ -210,6 +212,8 @@ describe('discoverAndRegister', () => {
     }))
     vi.doMock('@earendil-works/pi-ai', () => ({
       createAssistantMessageEventStream: vi.fn(),
+    }))
+    vi.doMock('@earendil-works/pi-ai/compat', () => ({
       streamSimpleOpenAICompletions: vi.fn(),
     }))
   })
