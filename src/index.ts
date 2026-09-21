@@ -1,7 +1,8 @@
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { resolvePluginConfig, discoverMcpTools, buildNativeProvider, readSkillsSetting, writeSkillsSetting } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions } from './tools.js'
-import { getGcloudToken } from './gcloud-token.js'
+import { getGcloudToken, getLastTokenFailure } from './gcloud-token.js'
+import { createAuthStateTracker } from './auth-state.js'
 import { createGcloudStreamSimple, setSessionId } from './stream-simple.js'
 import type { McpTool, PluginConfig, StreamSimpleFn } from './types.js'
 import { syncRemoteSkills, clearSkillsCache, getCachedSkillNames, getCacheAgeMinutes } from './skills-cache.js'
@@ -19,10 +20,23 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
     process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0')
 
+  let currentCtx: ExtensionContext | undefined
+
+  const authTracker = isGcloudAuth
+    ? createAuthStateTracker({
+        getToken: () => getGcloudToken(),
+        getFailure: () => getLastTokenFailure(),
+        emitFailed: (e) => pi.events.emit('litellm:auth_failed', e),
+        emitRecovered: () => pi.events.emit('litellm:auth_recovered', undefined),
+        warn: (msg) => console.warn(msg),
+      })
+    : undefined
+
   // When gcloud token auth is enabled, fetch a live token instead of using the static apiKey.
   // auth.apiKey.resolve() in buildNativeProvider calls getToken() per-request — no timer needed.
   const getToken = async (): Promise<string> => {
     if (isGcloudAuth) {
+      if (authTracker) return authTracker.get()
       return (await getGcloudToken()) ?? ''
     }
     return config.apiKey
@@ -60,7 +74,23 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // Initial MCP tool and skills discovery
   await discoverAndRegisterTools(pi, config, getToken, registeredTools, skillsEnabled)
 
+  if (authTracker) {
+    pi.events.on('litellm:auth_failed', (data) => {
+      const ctx = currentCtx
+      if (!ctx?.hasUI) return
+      ctx.ui.notify('litellm: token invalid — run: gcloud auth application-default login', 'error')
+      ctx.ui.setStatus('litellm', ctx.ui.theme.fg('error', '⚠ litellm token invalid — re-auth required'))
+    })
+    pi.events.on('litellm:auth_recovered', () => {
+      const ctx = currentCtx
+      if (!ctx?.hasUI) return
+      ctx.ui.setStatus('litellm', undefined)
+      ctx.ui.notify('litellm: token recovered', 'info')
+    })
+  }
+
   pi.on('session_start', async (_event, ctx) => {
+    currentCtx = ctx
     // Assign a stable session ID so all requests in this pi session are grouped
     // under one conversation in the LiteLLM logs — mirroring Claude Code behaviour.
     setSessionId(ctx.sessionManager.getSessionId() ?? crypto.randomUUID())
@@ -78,6 +108,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.registerCommand('litellm-skills', {
     description: 'Toggle remote skill syncing: on | off | status',
     handler: async (args: string, ctx) => {
+      currentCtx = ctx
       const sub = args.trim().toLowerCase()
 
       if (sub === 'on') {
