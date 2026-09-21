@@ -1,110 +1,319 @@
 ---
-status: approved
-done-when: An invalid_grant failure produces at most one styled chat line per prompt (short anti-retry wording), exactly one error toast + one persistent footer warning per break, ≤1 console warn per break/recovery, and recovery (next successful token exchange) clears the footer and fires an info toast — verified by the unit tests in §Tests and the manual acceptance scenario in §Acceptance.
+status: committed
+done-when: An invalid_grant failure produces at most one short chat line per prompt (non-retryable wording), exactly one error toast + one persistent footer warning per break, ≤1 console warn per break/recovery, and recovery (next successful token exchange) clears the footer and fires an info toast — verified by the unit tests in Tasks 1-4 and the manual acceptance scenario in Task 5.
 ---
-# Litellm auth error surface
 
-## Context
+# Litellm auth error surface — Implementation Plan
 
-When the GCloud OAuth refresh token is invalid (`invalid_grant` / `invalid_rapt`), every failed prompt currently produces a verbose chat error block (full OAuth JSON, up to 4 blocks when pi's auto-retry classifies the message as transient — pi's retryability is pure string matching of `errorMessage` against a transient-pattern list, `pi-ai/dist/utils/retry.js`) plus repeated identical `console.warn` lines (the token is re-exchanged per attempt: `getGcloudToken()` per `auth.apiKey.resolve()` call + the 401 forced refresh in `stream-simple.ts`).
+**Goal:** Replace `invalid_grant` chat spam with (1) one error toast per break, (2) a persistent footer warning until recovery, (3) one short non-retryable chat line per failed prompt, (4) ≤1 console warn per break/recovery.
 
-Research (2026-09-21, see `docs/research` session) established:
+**Architecture:** A new `auth-state.ts` state machine (`unknown → broken | valid, broken → valid → …`) wraps `getGcloudToken()` and classifies failures via a new failure sink in `gcloud-token.ts`; state transitions emit on `pi.events`. `stream-simple.ts` normalizes all gcloud token-failure messages to one constant line. `index.ts` (gcloud mode only) bridges the bus to `ctx.ui.notify`/`setStatus` using the shipped `examples/extensions/event-bus.ts` stored-ctx pattern.
 
-- Pi has **no API to suppress or dedupe** the per-attempt chat error block — a failed provider stream (`stopReason: "error"`) always renders as a red `Error:` line in the transcript (`dist/modes/interactive/interactive-mode.js:2732-2738`).
-- Non-chat surfaces exist on `ExtensionUIContext` (`dist/core/extensions/types.d.ts:62-96`): `notify(message, "info"|"warning"|"error")` (toast, renders immediately, not in transcript), `setStatus(key, text|undefined)` (persistent keyed footer), `setWidget`, `setFooter`, `setHeader`, dialogs. `ctx.hasUI` guards non-TUI modes.
-- `pi.unregisterProvider(name)` takes effect immediately (documented in `types.d.ts` docs block).
-- `pi.events` is the shared EventBus (`types.d.ts:1031`); event handlers receive a **live `ctx` per event** — no stored/stale context needed.
-- Auth-style error texts (401/403, `invalid_grant`, `unauthorized`) match **none** of pi's transient patterns, so a deliberately worded auth error fails fast with no auto-retry amplification.
-- Community pattern for provider failures: surface out-of-chat (footer/titlebar/OS notifications on `agent_settled`, per pi#7350).
+**Tech stack:** TypeScript (ESM; relative imports use `.js` extensions), vitest, `@earendil-works/pi-coding-agent` (type imports in `src/` only — never a runtime import of pi in `src/`).
 
-## Decisions
+**Global notes for the executing agent:**
+- Test command per file: `npx vitest run test/<file>.test.ts`; full suite: `npm run test:run` (non-watch); type check: `npm run typecheck`.
+- Follow existing test style: explicit `import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'`, imports of `../src/<file>.js`.
+- The spec this plan implements (context, decisions, rejected options, wording rationale) is the **previous revision of this file** — `git show HEAD~1:docs/roadmap/litellm-auth-error-surface.md`. Read it before Task 2.
+- Never `console.warn` on per-failure paths in `gcloud-token.ts` after Task 1 — warn ownership moves to `auth-state.ts`.
 
-### Surface (option A — adopted)
+---
 
-One-time `notify(…, "error")` + persistent keyed `setStatus` warning + short single-line chat error. **The provider stays selectable while broken.**
+### Task 1: `gcloud-token.ts` failure sink
 
-- Rejected B: `unregisterProvider` while broken + re-register on recovery (breaks discoverability; the user should *see* why a model fails, and a model that disappears from `/model` is confusing — see ADR `docs/adr/0002-keep-broken-provider-selectable.md`).
-- Rejected C: A + a styled one-time transcript card via `appendEntry` + `registerEntryRenderer` (transcript card duplicates the toast + footer for a deterministic condition; YAGNI).
+**Context:** Today every failed token exchange `console.warn`s, per attempt — the observed 3× log spam. The Task 2 state machine needs to know *why* the exchange failed (a `code` + raw `detail` for the console log only). This task moves warn ownership out of `gcloud-token.ts` and replaces it with a queryable "last failure" sink. The public `getGcloudToken(): Promise<string | null>` signature and the 50-min TTL coalescing behavior are unchanged.
 
-### State machine — new `src/auth-state.ts`
+**Files:**
+- Modify: `src/gcloud-token.ts`
+- Modify: `test/gcloud-token.test.ts`
 
-Module-scoped (lives as long as the token cache, resets per pi process — fresh pi session re-enters `unknown` and re-notifies once if still broken). Wraps `getGcloudToken()`; `gcloud-token.ts` stays pure. The wrapper receives an injected token function and event emitter so it is unit-testable with no pi/fs/network.
+**What to implement:**
 
-States: `unknown → broken | valid`, `broken → valid (recovered) → broken …`
+In `src/gcloud-token.ts`, add:
 
-| Transition | Trigger | Event (on `pi.events`) |
+```ts
+export type TokenFailureCode = 'invalid_grant' | 'exchange_failed' | 'bad_credentials'
+export interface TokenFailure { code: TokenFailureCode; detail: string }
+
+let lastTokenFailure: TokenFailure | null = null
+export function getLastTokenFailure(): TokenFailure | null {
+  return lastTokenFailure
+}
+```
+
+Record the sink (replacing each current `console.warn` failure call with a sink record — **remove the warn calls**):
+
+| Failure path in `getGcloudToken()` / `exchangeRefreshToken()` | `code` | `detail` |
 |---|---|---|
-| `unknown/valid → broken` | exchange fails (non-ok HTTP / OAuth error), ADC missing/unreadable, service-account-not-supported | `litellm:auth_failed { code, detail }` — **once per entry into `broken`** |
-| `broken → valid` | a subsequent exchange succeeds | `litellm:auth_recovered` — once per recovery |
+| `!response.ok` in `exchangeRefreshToken` | `text.includes('invalid_grant') ? 'invalid_grant' : 'exchange_failed'` | `` `HTTP ${response.status}: ${text}` `` |
+| `catch` (network/abort) in `exchangeRefreshToken` | `'exchange_failed'` | `` `Network error: ${error}` `` |
+| no ADC path found | `'bad_credentials'` | `'No Google ADC file found (set GOOGLE_APPLICATION_CREDENTIALS or run gcloud auth application-default login)'` |
+| unreadable/unparseable ADC file | `'bad_credentials'` | `` `Failed to read ADC file: ${adcPath}` `` |
+| `service_account` credentials | `'bad_credentials'` | `'Service account credentials are not yet supported (need authorized_user)'` |
+| unknown credentials type | `'bad_credentials'` | `` `Unknown credential type` `` |
 
-**Dedupe guarantee:** events fire on *state entry*, never per failed call. Repeated failures while `broken` (e.g. each user prompt) emit nothing.
+Also:
+- On a **successful** exchange (the branch that sets `cachedToken`), reset `lastTokenFailure = null`.
+- `resetTokenCache()` must also reset `lastTokenFailure = null` (the 401 forced-refresh path in `stream-simple.ts` calls it).
 
-**Classification** (from the OAuth error JSON / credential state):
+**Do not change:** `CACHE_TTL`, request coalescing (`inflight`), `getAdcPath()`/`readCredentials()` logic, `getGcloudToken` return type.
 
-- `error: invalid_grant` (incl. `error_subtype: invalid_rapt`) → `code: "invalid_grant"` — reauth required
-- other non-ok exchange status → `code: "exchange_failed"` (+ short status in `detail`)
-- ADC missing / unreadable / service account → `code: "bad_credentials"` (+ which case)
+**Steps:**
+- [ ] Edit `test/gcloud-token.test.ts`: keep the existing `warnSpy` pattern but now assert `expect(warnSpy).not.toHaveBeenCalled()` in the 5 failure-path tests, AND assert the sink:
+  - no-ADC test → `expect(getLastTokenFailure()).toMatchObject({ code: 'bad_credentials' })`
+  - invalid-JSON test → `code: 'bad_credentials'`
+  - service-account test → `code: 'bad_credentials'` (and drop the old exact-warn assertion on lines ~118-130)
+  - exchange-failure test (400 + `{"error":"invalid_grant"}`) → `code: 'invalid_grant'`
+  - network-error test → `code: 'exchange_failed'`
+  - Add test: after a successful exchange, `getLastTokenFailure()` returns `null` (call it after the existing success test setup).
+  - Add test: after a failure, `resetTokenCache()` clears the sink (`getLastTokenFailure()` → `null`).
+- [ ] Run `npx vitest run test/gcloud-token.test.ts`
+  - Did it fail with the new sink assertions (undefined function / code mismatch)? If it passed unexpectedly, stop and investigate.
+- [ ] Implement the sink + warn removal in `src/gcloud-token.ts`.
+- [ ] Run `npx vitest run test/gcloud-token.test.ts`
+  - Did all tests pass? If not, fix and re-run.
+- [ ] Run `npm run typecheck`
+- [ ] Commit: `feat: record token-failure sink in gcloud-token, remove per-failure console.warn`
 
-`detail` keeps raw info for the console log only — **never** into the chat line.
+**Acceptance criteria:**
+- [ ] No `console.warn` call remains on any failure path in `src/gcloud-token.ts`.
+- [ ] `getLastTokenFailure()` returns the classified code/detail after each failure class and `null` after success and after `resetTokenCache()`.
 
-### Chat error line — `stream-simple.ts`
+---
 
-Every token-failure path in gcloud mode (exchange fails before request; 401 → fresh refresh fails; 401 again after refresh) maps to exactly one stable line:
+### Task 2: `src/auth-state.ts` state machine
+
+**Context:** The dedupe heart of the feature. It wraps the token fetch, tracks `unknown | valid | broken`, and guarantees `emitFailed`/`emitRecovered` fire **once per state entry** — repeated failures while `broken` (each user prompt) emit nothing and warn nothing. It also owns the console warn (raw `detail` appears in the log exactly once per break), and exposes the single chat-line constant used by Task 3. Read the spec (previous revision of this file) for the wording rationale before writing `AUTH_CHAT_ERROR_LINE`.
+
+**Files:**
+- Create: `src/auth-state.ts`
+- Create: `test/auth-state.test.ts`
+
+**What to implement — exact API:**
+
+```ts
+import type { TokenFailure } from './gcloud-token.js'
+
+export type AuthState = 'unknown' | 'valid' | 'broken'
+
+export interface AuthStateDeps {
+  getToken: () => Promise<string | null>
+  getFailure: () => TokenFailure | null
+  emitFailed: (e: TokenFailure) => void
+  emitRecovered: () => void
+  warn: (msg: string) => void
+}
+
+export interface AuthStateTracker {
+  get: () => Promise<string>   // returns '' on failure — mirrors the `?? ''` contract in index.ts
+  state: () => AuthState
+  reset: () => void           // back to 'unknown', emits nothing (tests / process restart)
+}
+
+export function createAuthStateTracker(deps: AuthStateDeps): AuthStateTracker
+
+// Single source of truth for the normalized gcloud token-failure chat line.
+// WORDING IS A CONTROL KNOB: it must match none of pi's transient-error
+// patterns (node_modules/@earendil-works/pi-ai/dist/utils/retry.js
+// RETRYABLE_PROVIDER_ERROR_PATTERN) or pi's turn auto-retry will amplify
+// every failed prompt. Guarded by the test in Task 3.
+export const AUTH_CHAT_ERROR_LINE =
+  'litellm: Google token invalid — re-auth required: gcloud auth application-default login'
+```
+
+`get()` logic, exactly:
 
 ```
-litellm: Google token invalid — re-auth required: gcloud auth application-default login
+token = await deps.getToken()
+if (token !== '' ) {                       // successful, non-empty
+  if (state === 'broken') { state = 'valid'; deps.emitRecovered(); deps.warn('litellm: gcloud token recovered') }
+  else if (state === 'unknown') { state = 'valid' }   // no event for the first success
+  return token
+}
+// token === '' → failure
+const failure = deps.getFailure()
+const e: TokenFailure = failure ?? { code: 'exchange_failed', detail: 'token fetch returned empty' }
+if (state !== 'broken') {
+  state = 'broken'
+  deps.emitFailed(e)
+  deps.warn(`[pi-provider-litellm] token failed (${e.code}): ${e.detail}`)
+}
+// state === 'broken': SUPPRESS — no emit, no warn
+return ''
 ```
 
-**Wording is a control knob (verified):** the line contains no token from pi's transient-error pattern list (`429/500/502/503/504/524`, `overloaded`, `rate.?limit`, `too many requests`, `service.?unavailable`, `server.?error`, `internal.?error`, `network.*`, `connection.*`, `fetch failed`, `timeout`, `timed? out`, `terminated`, `websocket.*`, `ended without`, `stream ended before…`, `retry delay`, "retry your request" phrasings, `ResourceExhausted`), so `isRetryableAssistantError()` is false → max one chat block per prompt, no auto-retry + backoff amplification.
+No module-level singletons — all state lives inside the closure returned by `createAuthStateTracker`.
 
-**Carve-out:** non-auth (transient proxy) errors — e.g. a real 502 from LiteLLM — must pass through **unchanged** so they stay retryable by pi's normal policy. Only the **auth/token class** is normalized.
+**Steps:**
+- [ ] Write `test/auth-state.test.ts` with fully injected fakes (no fs, no network, no pi). Helper: `function makeDeps(overrides)` returning `{ getToken, getFailure, emitFailed: vi.fn(), emitRecovered: vi.fn(), warn: vi.fn() }` plus `newTracker = () => createAuthStateTracker(makeDeps())`. Tests:
+  1. `fails once into broken` — `getToken → null`, `getFailure → {code:'invalid_grant', detail:'HTTP 400: …'}`: first `get()` → `''`, `emitFailed` called exactly once with the failure object; `state()` → `'broken'`.
+  2. `suppresses while broken` — second `get()` (still failing) → `''`, `emitFailed` still 1 total, `warn` still 1 total.
+  3. `recovery emits exactly once` — after (1)-(2), `getToken → 'tok'`: `get()` → `'tok'`, `state()` → `'valid'`, `emitRecovered` 1, recovery warn fired. Then another success → no second `emitRecovered`.
+  4. `re-arms after recovery` — success after recovery → fail again → `emitFailed` fires **again** (2 total for the session) and warn fires again: proves `broken → valid → broken` re-enters.
+  5. `first success from unknown is silent` — `getToken → 'tok'` as the very first call → no `emitFailed`/`emitRecovered`, `state()` → `'valid'`.
+  6. `empty failure falls back to exchange_failed` — `getToken → ''`, `getFailure → null` → `emitFailed` called with `{ code: 'exchange_failed', detail: 'token fetch returned empty' }`.
+  7. `reset` — after (1), `reset()` → `state()` → `'unknown'`, no events fired by `reset()`, next failure re-emits.
+  8. `returns falsy token as '' contract` — `getToken → ''` is treated as failure (covered by 1/6; assert `get()` returns `''` not `undefined`).
+- [ ] Run `npx vitest run test/auth-state.test.ts`
+  - Did it fail with an import error / missing module? (Expected — the file doesn't exist yet.)
+- [ ] Implement `src/auth-state.ts` exactly per the API above.
+- [ ] Run `npx vitest run test/auth-state.test.ts`
+  - Did all tests pass? If not, fix and re-run.
+- [ ] Run `npm run typecheck`
+- [ ] Commit: `feat: add auth-state machine with once-per-transition events`
 
-### Console ergonomics — `gcloud-token.ts` / `auth-state.ts`
+**Acceptance criteria:**
+- [ ] `emitFailed`/`emitRecovered` fire exactly once per state entry; zero events for repeated failures while `broken`.
+- [ ] `warn` fires at most once per break and once per recovery.
+- [ ] `AUTH_CHAT_ERROR_LINE` is exported from `src/auth-state.ts` with the exact string from the spec.
 
-- `gcloud-token.ts` **stops `console.warn`-ing on failure paths** and instead records a **failure sink**: `let lastTokenFailure: TokenFailure | null` + `getLastTokenFailure()` + cleared on a successful exchange. Existing failure tests asserting `console.warn` are updated to assert the sink instead.
-- The **auth state machine owns the warn**: raw detail (including the OAuth JSON) `console.warn`s **once**, on the `broken` transition, then is suppressed while `broken`.
-- One `console.warn` on recovery.
-- This kills the 3× identical warn per episode observed in the field.
-- **Network exchange failures** (fetch throw/timeout) classify as `code: "exchange_failed"` with `detail` carrying the failure text — the code set stays the spec'd three.
+---
 
-### UI bridge — `index.ts`
+### Task 3: `stream-simple.ts` — one chat line for all gcloud token failures
 
-Subscribe once at extension load. **Correction (verified against `dist/core/event-bus.d.ts`):** `EventBus.on(channel, handler)` handlers receive **only `data`** — no `ctx`. Canonical pattern (shipped `examples/extensions/event-bus.ts`): a module-scoped `currentCtx` refreshed in `session_start` (and, for cheap robustness, in the `litellm-skills` command handler).
+**Context:** In gcloud mode every token failure (exchange fails before the request; 401 → forced refresh fails; 401 again after refresh) must produce the single constant `AUTH_CHAT_ERROR_LINE` instead of three different verbose messages. The 401 detection logic, the 401-path `console.warn`s, `resetTokenCache()`, and the non-auth (transient proxy) error pass-through are **unchanged** — a real 502 from LiteLLM must keep its current text so pi auto-retries it.
 
-- `pi.events.on("litellm:auth_failed", (data) => …)` and `pi.events.on("litellm:auth_recovered", () => …)`
-- **On failure** (only on transition into `broken`): if `currentCtx?.hasUI` —
-  - `currentCtx.ui.notify("litellm: token invalid — run: gcloud auth application-default login", "error")`
-  - `currentCtx.ui.setStatus("litellm", themed ⚠ warning)` (persistent footer until recovery)
-  - if `!hasUI` — do nothing (the chat line covers print/RPC modes)
-- **On recovery**: if `currentCtx?.hasUI` — `currentCtx.ui.setStatus("litellm", undefined)` (clear) + `currentCtx.ui.notify("litellm: token recovered", "info")`
-- **Staleness risk (accepted):** if a session replacement (`withSession`) happens before the event fires, the UI action is lost until the next `session_start`. Acceptable: events only fire on token fetch attempts, which require a live session; the chat line + console warn still fire regardless of ctx.
-- Status-bar text colored via `currentCtx.ui.theme` (pattern: `examples/extensions/status-line.ts`).
-- The handler is synchronous — not affected by the post-`await fetch()` footer re-render quirk (old-repo issue #3602).
-- **Known limitation:** a `broken` transition detected during load (e.g. by startup `syncRemoteSkills`) fires before the first `session_start` → toast/footer are skipped for that first break; the chat line still shows. First *prompt* after `session_start` re-enters only if state reset; otherwise the footer is set on the next break. Accepted.
+**Files:**
+- Modify: `src/stream-simple.ts`
+- Modify: `test/stream-simple.test.ts`
 
-### Scope limits
+**What to implement:**
 
-- **Static-key mode** (no `LITELLM_GCLOUD_TOKEN_AUTH`): the wrapper is only wired when `isGcloudAuth` (mirroring how `streamSimple` is only created in that mode) → zero behavior change, no events, no UI.
-- **No polling/timer**: recovery is detected on the next real `getToken()` success — consistent with the package's no-timer design (existing 50-min TTL comment, `index.ts:32`).
+In `src/stream-simple.ts`:
+- Add `import { AUTH_CHAT_ERROR_LINE } from './auth-state.js'`.
+- Replace the error string `'Failed to refresh gcloud token after 401'` → `AUTH_CHAT_ERROR_LINE`.
+- Replace the error string `'Authentication failed after token refresh (401 Unauthorized)'` → `AUTH_CHAT_ERROR_LINE`.
+- Leave the `catch (err)` block (generic unexpected errors) untouched.
 
-## Tests
+**Do not change:** the `is401` detection, the 401/refresh `console.warn` lines, `makeError` helper, header/session-id logic.
 
-Unit (vitest, following `test/` patterns):
+**Steps:**
+- [ ] Edit `test/stream-simple.test.ts`:
+  1. Find the existing tests that assert the two old messages (`'Failed to refresh gcloud token after 401'`, `'Authentication failed after token refresh (401 Unauthorized)'`) and change the expectations to `AUTH_CHAT_ERROR_LINE` (import it from `../src/auth-state.js`).
+  2. Add the **wording guard test** `it('AUTH_CHAT_ERROR_LINE matches no pi transient-error pattern')`: copy the pattern list from `node_modules/@earendil-works/pi-ai/dist/utils/retry.js` (`RETRYABLE_PROVIDER_ERROR_PATTERN`) into a local `const RETRYABLE_PATTERNS: string[]` in the test file with a comment `// KEEP IN SYNC with pi-ai dist/utils/retry.js (checked 2026-09-21)`. For each pattern: `expect(new RegExp(p, 'i').test(AUTH_CHAT_ERROR_LINE)).toBe(false)`.
+  3. Confirm the existing non-auth pass-through tests still pass (do not modify them).
+- [ ] Run `npx vitest run test/stream-simple.test.ts`
+  - Did the updated message assertions fail (old strings still emitted)? If the guard test passes trivially before implementation, that's fine — it guards `auth-state.ts` from Task 2.
+- [ ] Implement the two replacements in `src/stream-simple.ts`.
+- [ ] Run `npx vitest run test/stream-simple.test.ts`
+  - Did all tests pass? If not, fix and re-run.
+- [ ] Run `npm run typecheck`
+- [ ] Commit: `feat: collapse gcloud token failures to one non-retryable chat line`
 
-1. `unknown → broken` on exchange failure → exactly **one** `auth_failed`; repeated failures while `broken` → **zero** events.
-2. `broken → valid` on first success after break → exactly one `auth_recovered`; subsequent successes → zero.
-3. Classification: `invalid_grant` + `invalid_rapt` → `invalid_grant`; other non-ok → `exchange_failed`; ADC missing → `bad_credentials`.
-4. Wrapper works with injected fake token fn + fake emitter (no pi, no fs, no network).
-5. All token-failure paths in `stream-simple.ts` gcloud mode produce the registered one-line message.
-6. That one-line message contains **no** token from pi's retryable pattern set (guards the wording-control-knob against drift).
-7. Non-auth (transient proxy) error text passes through unchanged (the 502 carve-out).
+**Acceptance criteria:**
+- [ ] All three gcloud token-failure paths in `stream-simple.ts` emit exactly `AUTH_CHAT_ERROR_LINE`.
+- [ ] The guard test fails if `AUTH_CHAT_ERROR_LINE` gains any transient-pattern token (e.g. `timeout`).
 
-## Acceptance (manual)
+---
 
-- Break the refresh token (let it go `invalid_rapt`, or rename the ADC to test `bad_credentials`). Send 3 prompts → expect: **1** error toast, **1** persistent footer warning, one short chat line per prompt, **1** console warn (not 3).
-- Run `gcloud auth application-default login` → next prompt → footer clears, recovery toast appears, no further warns.
-- `pi -p` (print mode): no toast/status crash; chat line is short.
+### Task 4: `index.ts` — wire the bus to notify + status bar
 
-## open-questions
+**Context:** The UI bridge. Verified against `dist/core/event-bus.d.ts`: `EventBus.on(channel, handler)` handlers receive **only `data`** — never a `ctx`. The canonical pattern for UI usage from a bus handler is shipped in `examples/extensions/event-bus.ts`: a module-scoped `currentCtx` refreshed in `session_start` (we also refresh it in the `litellm-skills` command handler for cheap robustness). Staleness after a `withSession` replacement is an accepted risk (events only fire on token fetch attempts, which require a live session; the chat line + console warn fire regardless of `ctx`).
 
-- (none — surfaced wording choices are one-line changes; recovery toast vs silent clear is an open tweak noted in §Decisions/UI bridge)
+**Files:**
+- Modify: `src/index.ts`
+- Modify: `test/index.test.ts`
+
+**What to implement:**
+
+In `src/index.ts`:
+
+1. Imports — do NOT add a second import from `@earendil-works/pi-coding-agent`: merge `ExtensionContext` into the existing line 1 `import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'` (→ `import type { ExtensionAPI, ExtensionContext } ...`), extend the existing `import { getGcloudToken } from './gcloud-token.js'` with `getLastTokenFailure`, and add `import { createAuthStateTracker } from './auth-state.js'`:
+```ts
+// line 1 becomes:
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import { createAuthStateTracker } from './auth-state.js'
+import { getGcloudToken, getLastTokenFailure } from './gcloud-token.js'
+```
+
+2. In the factory, right after `const isGcloudAuth = …`:
+```ts
+let currentCtx: ExtensionContext | undefined
+
+const authTracker = isGcloudAuth
+  ? createAuthStateTracker({
+      getToken: () => getGcloudToken(),
+      getFailure: () => getLastTokenFailure(),
+      emitFailed: (e) => pi.events.emit('litellm:auth_failed', e),
+      emitRecovered: () => pi.events.emit('litellm:auth_recovered', undefined),
+      warn: (msg) => console.warn(msg),
+    })
+  : undefined
+```
+
+3. Replace the existing `getToken` gcloud branch so **every** gcloud token fetch (auth resolve, skills sync, stream) goes through the tracker:
+```ts
+const getToken = async (): Promise<string> => {
+  if (isGcloudAuth) {
+    if (authTracker) return authTracker.get()
+    return (await getGcloudToken()) ?? ''
+  }
+  return config.apiKey
+}
+```
+
+4. In the `session_start` handler, add `currentCtx = ctx` as the first statement. In the `litellm-skills` command handler, add `currentCtx = ctx` as its first statement.
+
+5. After the provider registration block (still inside the factory, gcloud mode only — gate on `authTracker`), register the bus handlers:
+```ts
+if (authTracker) {
+  pi.events.on('litellm:auth_failed', (data) => {
+    const ctx = currentCtx
+    if (!ctx?.hasUI) return
+    ctx.ui.notify('litellm: token invalid — run: gcloud auth application-default login', 'error')
+    ctx.ui.setStatus('litellm', ctx.ui.theme.fg('error', '⚠ litellm token invalid — re-auth required'))
+  })
+  pi.events.on('litellm:auth_recovered', () => {
+    const ctx = currentCtx
+    if (!ctx?.hasUI) return
+    ctx.ui.setStatus('litellm', undefined)
+    ctx.ui.notify('litellm: token recovered', 'info')
+  })
+}
+```
+
+**Do not change:** static-mode behavior, MCP discovery, skills-toggle command body, session-id logic, `buildNativeProvider` wiring.
+
+**Steps:**
+- [ ] Edit `test/index.test.ts` (follow the existing `createMockPi` + `vi.doMock` + factory-call pattern in this file):
+  1. Extend `MockPi` with `events: { on: ..., emit: ... }` where `on: vi.fn((channel: string, handler: Function) => { (handlers['events'] ??= []).push({ channel, handler }) })` (add an `eventsEntries` helper to look up handlers by channel) and `emit: vi.fn()`.
+  2. Add `vi.doMock('../src/gcloud-token.js', () => ({ getGcloudToken: vi.fn(() => Promise.resolve('tok')), resetTokenCache: vi.fn(), getLastTokenFailure: vi.fn(() => null) }))` (and make sure any existing gcloud-token mock in this file is replaced consistently).
+  3. Add a `makeFakeCtx()` helper: `{ hasUI: true, ui: { notify: vi.fn(), setStatus: vi.fn(), theme: { fg: (_c: string, t: string) => t } } }`.
+  4. Tests (all gcloud mode: `vi.stubEnv('LITELLM_GCLOUD_TOKEN_AUTH', '1')` before importing the factory, `vi.resetModules()` per test as the file already does):
+     a. `bridge: auth_failed fires notify + status once` — run the factory, invoke the stored `session_start` handler with `makeFakeCtx()`, then invoke the `events` handler for channel `litellm:auth_failed` with `{ code: 'invalid_grant', detail: 'HTTP 400: …' }` → `notify` called exactly once with `('litellm: token invalid — run: gcloud auth application-default login', 'error')`; `setStatus` called exactly once with `('litellm', '⚠ litellm token invalid — re-auth required')`.
+     b. `bridge: auth_recovered clears status + info toast` — same setup; invoke `litellm:auth_recovered` handler → `setStatus('litellm', undefined)` and `notify('litellm: token recovered', 'info')` each exactly once.
+     c. `bridge: no UI ops without ctx/hasUI` — (i) invoke the failed handler **before** any `session_start` → no notify/setStatus calls; (ii) with a ctx of `hasUI: false` → no notify/setStatus calls.
+     d. `static mode registers no litellm bus handlers` — env unset; after factory run, `events.on` was never called with `litellm:auth_failed` / `litellm:auth_recovered`.
+  5. Ensure all pre-existing tests in the file still pass (they should — the mock pi extension is additive).
+- [ ] Run `npx vitest run test/index.test.ts`
+  - Did the 4 new tests fail (handlers not yet wired)?
+- [ ] Implement `src/index.ts` per the 5 numbered changes above.
+- [ ] Run `npx vitest run test/index.test.ts`
+  - Did all tests pass? If not, fix and re-run.
+- [ ] Run the full suite `npm run test:run` and `npm run typecheck`.
+- [ ] Commit: `feat: bridge auth-state events to notify + footer status (stored-ctx pattern)`
+
+**Acceptance criteria:**
+- [ ] In gcloud mode, a `litellm:auth_failed` event produces exactly one `notify('…','error')` + one `setStatus('litellm', …)` when a UI ctx exists; a `litellm:auth_recovered` event clears the status and fires one info toast.
+- [ ] In static-key mode no litellm bus handlers are registered and no behavior changed.
+
+---
+
+### Task 5: Full verification + manual acceptance
+
+**Context:** Nothing to implement — this task exists so the feature is only "done" when the observable acceptance criteria hold, not just when unit tests pass.
+
+**Steps:**
+- [ ] Run `npm run test:run` (full vitest suite, non-watch) — did **all** tests pass? If not, debug and re-run before anything else.
+- [ ] Run `npm run typecheck` — did it succeed?
+- [ ] `grep -rn "console.warn" src/gcloud-token.ts` — confirm **zero** matches on failure paths (only non-failure paths, if any, may warn).
+- [ ] Manual acceptance (needs a machine with a broken gcloud refresh token; if unavailable, script the sequence the user runs and record their output):
+  1. Break the token (let it go `invalid_rapt`, or temporarily rename the ADC file for the `bad_credentials` path). Send 3 prompts → **observe:** exactly 1 error toast, 1 persistent footer warning, one short chat line per prompt, 1 console warn (not 3).
+  2. Run `gcloud auth application-default login` → send 1 prompt → **observe:** footer cleared, recovery toast, no further warns, the prompt works.
+  3. `pi -p` (print mode) with a broken token → **observe:** no crash, short chat line.
+- [ ] If any manual step deviates from expectations, fix the defect in the relevant task's files, re-run `npm run test:run` + `npm run typecheck`, and re-verify.
+- [ ] No code changes expected; if a fix landed, commit it: `fix: litellm auth error surface acceptance fix`
+
+**Acceptance criteria:**
+- [ ] Full suite green, typecheck green, no per-failure warns in `gcloud-token.ts`.
+- [ ] All three manual acceptance observations hold.
