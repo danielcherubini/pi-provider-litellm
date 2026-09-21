@@ -56,24 +56,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // and the skill_list tool registration are gated behind this setting.
   const skillsEnabled = readSkillsSetting()
 
-  // Sync remote skills to local cache so pi discovers them natively.
-  // Pi scans ~/.pi/agent/skills/ and picks up skills from the remote/ subdirectory.
-  if (skillsEnabled) {
-    await syncRemoteSkills(config.url, getToken, () => {}) // silent on startup
-  }
-
-  // Register the native provider — pi owns the model cache and refresh lifecycle.
-  // fetchModels is called by pi on startup (restoring from models-store.json) and on refresh.
-  // auth.apiKey.resolve() is called per-request so gcloud tokens stay fresh automatically.
-  const provider = buildNativeProvider(config, isGcloudAuth, getToken, streamSimple)
-  // Cast needed: devDependency copy of @earendil-works/pi-ai and the runtime copy
-  // bundled inside pi-coding-agent are distinct type worlds. Extract<...> picks the
-  // Provider overload (not the string overload) without importing from either copy.
-  pi.registerProvider(provider as unknown as Extract<Parameters<typeof pi.registerProvider>[0], object>)
-
-  // Initial MCP tool and skills discovery
-  await discoverAndRegisterTools(pi, config, getToken, registeredTools, skillsEnabled)
-
+  // Register auth event bridge BEFORE startup token consumers (syncRemoteSkills)
+  // so that a broken token at load time doesn't emit auth_failed before listeners exist.
   const showAuthBroken = (target: ExtensionContext | undefined) => {
     if (!target?.hasUI) return
     target.ui.notify(AUTH_TOAST_LINE, 'error')
@@ -96,6 +80,24 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       showAuthRecovered(currentCtx)
     })
   }
+
+  // Sync remote skills to local cache so pi discovers them natively.
+  // Pi scans ~/.pi/agent/skills/ and picks up skills from the remote/ subdirectory.
+  if (skillsEnabled) {
+    await syncRemoteSkills(config.url, getToken, () => {}) // silent on startup
+  }
+
+  // Register the native provider — pi owns the model cache and refresh lifecycle.
+  // fetchModels is called by pi on startup (restoring from models-store.json) and on refresh.
+  // auth.apiKey.resolve() is called per-request so gcloud tokens stay fresh automatically.
+  const provider = buildNativeProvider(config, isGcloudAuth, getToken, streamSimple)
+  // Cast needed: devDependency copy of @earendil-works/pi-ai and the runtime copy
+  // bundled inside pi-coding-agent are distinct type worlds. Extract<...> picks the
+  // Provider overload (not the string overload) without importing from either copy.
+  pi.registerProvider(provider as unknown as Extract<Parameters<typeof pi.registerProvider>[0], object>)
+
+  // Initial MCP tool and skills discovery
+  await discoverAndRegisterTools(pi, config, getToken, registeredTools, skillsEnabled)
 
   pi.on('session_start', async (_event, ctx) => {
     currentCtx = ctx
