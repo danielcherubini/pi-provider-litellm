@@ -17,6 +17,7 @@ import {
   type TranscriptContext,
 } from '@earendil-works/pi-ai'
 import { resetTokenCache } from './gcloud-token.js'
+import { AUTH_CHAT_ERROR_LINE } from './auth-state.js'
 import type { StreamSimpleFn } from './types.js'
 
 const LOG = '[pi-provider-litellm]'
@@ -154,7 +155,7 @@ export function createGcloudStreamSimple(
 
           if (!freshToken) {
             console.warn(`${LOG} Failed to get fresh token after 401`)
-            outerStream.push({ type: 'error', reason: 'error', error: makeError('Failed to refresh gcloud token after 401') })
+            outerStream.push({ type: 'error', reason: 'error', error: makeError(AUTH_CHAT_ERROR_LINE) })
             outerStream.end()
             return
           }
@@ -164,7 +165,7 @@ export function createGcloudStreamSimple(
           const retryResult = await runStream(freshToken)
           if (retryResult === '401') {
             console.warn(`${LOG} Retry also got 401 — giving up`)
-            outerStream.push({ type: 'error', reason: 'error', error: makeError('Authentication failed after token refresh (401 Unauthorized)') })
+            outerStream.push({ type: 'error', reason: 'error', error: makeError(AUTH_CHAT_ERROR_LINE) })
             outerStream.end()
           }
         }
