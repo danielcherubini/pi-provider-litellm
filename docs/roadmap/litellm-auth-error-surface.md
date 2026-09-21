@@ -61,22 +61,26 @@ litellm: Google token invalid — re-auth required: gcloud auth application-defa
 
 ### Console ergonomics — `gcloud-token.ts` / `auth-state.ts`
 
-- Raw detail (including the OAuth JSON) `console.warn`s **once**, on the `broken` transition, then is suppressed while `broken`.
+- `gcloud-token.ts` **stops `console.warn`-ing on failure paths** and instead records a **failure sink**: `let lastTokenFailure: TokenFailure | null` + `getLastTokenFailure()` + cleared on a successful exchange. Existing failure tests asserting `console.warn` are updated to assert the sink instead.
+- The **auth state machine owns the warn**: raw detail (including the OAuth JSON) `console.warn`s **once**, on the `broken` transition, then is suppressed while `broken`.
 - One `console.warn` on recovery.
 - This kills the 3× identical warn per episode observed in the field.
+- **Network exchange failures** (fetch throw/timeout) classify as `code: "exchange_failed"` with `detail` carrying the failure text — the code set stays the spec'd three.
 
 ### UI bridge — `index.ts`
 
-Subscribe once at extension load:
+Subscribe once at extension load. **Correction (verified against `dist/core/event-bus.d.ts`):** `EventBus.on(channel, handler)` handlers receive **only `data`** — no `ctx`. Canonical pattern (shipped `examples/extensions/event-bus.ts`): a module-scoped `currentCtx` refreshed in `session_start` (and, for cheap robustness, in the `litellm-skills` command handler).
 
-- `pi.events.on("litellm:auth_failed", async (_e, ctx) => …)` and `pi.events.on("litellm:auth_recovered", async (_e, ctx) => …)` — each handler receives a **fresh live `ctx`** (this is why the EventBus wiring was chosen over a module-var holding the latest `ctx`; pi docs warn session-bound objects go stale after session replacement / `withSession`).
-- **On failure** (only on transition into `broken`): if `ctx.hasUI` —
-  - `ctx.ui.notify("litellm: token invalid — run: gcloud auth application-default login", "error")`
-  - `ctx.ui.setStatus("litellm", themed ⚠ warning)` (persistent footer until recovery)
-  - if `!ctx.hasUI` — do nothing (the chat line covers print/RPC modes)
-- **On recovery**: if `ctx.hasUI` — `ctx.ui.setStatus("litellm", undefined)` (clear) + `ctx.ui.notify("litellm: token recovered", "info")`
-- Status-bar text colored via `ctx.ui.theme` (pattern: `examples/extensions/status-line.ts`).
+- `pi.events.on("litellm:auth_failed", (data) => …)` and `pi.events.on("litellm:auth_recovered", () => …)`
+- **On failure** (only on transition into `broken`): if `currentCtx?.hasUI` —
+  - `currentCtx.ui.notify("litellm: token invalid — run: gcloud auth application-default login", "error")`
+  - `currentCtx.ui.setStatus("litellm", themed ⚠ warning)` (persistent footer until recovery)
+  - if `!hasUI` — do nothing (the chat line covers print/RPC modes)
+- **On recovery**: if `currentCtx?.hasUI` — `currentCtx.ui.setStatus("litellm", undefined)` (clear) + `currentCtx.ui.notify("litellm: token recovered", "info")`
+- **Staleness risk (accepted):** if a session replacement (`withSession`) happens before the event fires, the UI action is lost until the next `session_start`. Acceptable: events only fire on token fetch attempts, which require a live session; the chat line + console warn still fire regardless of ctx.
+- Status-bar text colored via `currentCtx.ui.theme` (pattern: `examples/extensions/status-line.ts`).
 - The handler is synchronous — not affected by the post-`await fetch()` footer re-render quirk (old-repo issue #3602).
+- **Known limitation:** a `broken` transition detected during load (e.g. by startup `syncRemoteSkills`) fires before the first `session_start` → toast/footer are skipped for that first break; the chat line still shows. First *prompt* after `session_start` re-enters only if state reset; otherwise the footer is set on the next break. Accepted.
 
 ### Scope limits
 
