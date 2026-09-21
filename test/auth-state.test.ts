@@ -179,9 +179,10 @@ describe('createAuthStateTracker', () => {
     // The event still fires exactly once per transition — the fallback is intentional.
     const deps = makeDeps({
       getToken: async () => null,
-      // First call (the one get() actually uses) returns null — simulating the
-      // race where resetTokenCache() cleared the sink before get() reads it.
-      getFailure: vi.fn().mockReturnValueOnce(null).mockReturnValue(SAMPLE_FAILURE),
+      // get() reads the sink exactly once, so a plain () => null is equivalent
+      // — simulating the race where resetTokenCache() cleared the sink before
+      // get() reads it.
+      getFailure: () => null,
     })
     const tracker = createAuthStateTracker(deps)
 
