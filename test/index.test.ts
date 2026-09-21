@@ -467,6 +467,31 @@ describe('bridge: auth event → UI notifications', () => {
     expect(channels).not.toContain('litellm:auth_recovered')
   })
 
+  it('bridge: session_shutdown clears ctx so stale auth_failed does not call UI', async () => {
+    const mod = await import('../src/index.js')
+    const mockPi = createMockPi()
+    await mod.default(mockPi as unknown as ExtensionAPI)
+
+    // Populate currentCtx via session_start
+    const fakeCtx = makeFakeCtx()
+    const sessionStartHandler = mockPi.handlers['session_start']?.[0]
+    await sessionStartHandler?.({}, fakeCtx)
+
+    // Now invoke session_shutdown with the same ctx → should clear currentCtx
+    const sessionShutdownHandler = mockPi.handlers['session_shutdown']?.[0]
+    await sessionShutdownHandler?.({}, fakeCtx)
+
+    // Fire auth_failed after shutdown — currentCtx is cleared, so no UI ops
+    const failedHandlers = mockPi.events.eventHandlers['litellm:auth_failed'] ?? []
+    expect(failedHandlers.length).toBeGreaterThan(0)
+    await failedHandlers[0]?.({ code: 'invalid_grant', detail: 'HTTP 400: invalid_grant' })
+
+    const ui = fakeCtx.ui as { notify: ReturnType<typeof vi.fn>; setStatus: ReturnType<typeof vi.fn>; setWidget: ReturnType<typeof vi.fn> }
+    expect(ui.notify).not.toHaveBeenCalled()
+    expect(ui.setStatus).not.toHaveBeenCalled()
+    expect(ui.setWidget).not.toHaveBeenCalled()
+  })
+
   it('bridge: session_start re-fires UI when token is already broken', async () => {
     // Configure gcloud token mock: token is empty → broken state at startup
     const mockGetGcloudToken = vi.fn().mockResolvedValue('')

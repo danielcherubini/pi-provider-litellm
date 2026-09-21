@@ -112,8 +112,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     await discoverAndRegisterTools(pi, config, getToken, registeredTools, sessionSkillsEnabled)
   })
 
-  pi.on('session_shutdown', async (_event, _ctx) => {
+  pi.on('session_shutdown', async (_event, ctx) => {
     setSessionId(undefined)
+    // An in-flight token operation may emit an auth transition after shutdown;
+    // don't let it update a discarded context (only clear if still ours).
+    if (currentCtx === ctx) currentCtx = undefined
   })
 
   pi.registerCommand('litellm-skills', {
