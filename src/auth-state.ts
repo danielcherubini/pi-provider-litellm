@@ -16,6 +16,8 @@ export interface AuthStateTracker {
   state: () => AuthState
   /** Back to 'unknown', emits nothing (tests / process restart) */
   reset: () => void
+  /** Explicit broken entry — e.g. token rejected by provider. Suppressed if already broken. */
+  markBroken(failure?: TokenFailure): void
 }
 
 // Single source of truth for the normalized gcloud token-failure chat line.
@@ -36,6 +38,16 @@ export const AUTH_STATUS_LINE = '⚠ litellm token invalid \u2014 re-auth requir
 export function createAuthStateTracker(deps: AuthStateDeps): AuthStateTracker {
   let state: AuthState = 'unknown'
 
+  /** Shared once-per-entry logic for transitioning to 'broken'. */
+  function enterBroken(e: TokenFailure): void {
+    if (state !== 'broken') {
+      state = 'broken'
+      deps.emitFailed(e)
+      deps.warn(`[pi-provider-litellm] token failed (${e.code}): ${e.detail}`)
+    }
+    // state === 'broken': SUPPRESS — no emit, no warn
+  }
+
   async function get(): Promise<string> {
     const token = await deps.getToken()
 
@@ -55,15 +67,16 @@ export function createAuthStateTracker(deps: AuthStateDeps): AuthStateTracker {
     // token is null or '' → failure
     const failure = deps.getFailure()
     const e: TokenFailure = failure ?? { code: 'exchange_failed', detail: 'token fetch returned empty' }
-
-    if (state !== 'broken') {
-      state = 'broken'
-      deps.emitFailed(e)
-      deps.warn(`[pi-provider-litellm] token failed (${e.code}): ${e.detail}`)
-    }
-    // state === 'broken': SUPPRESS — no emit, no warn
-
+    enterBroken(e)
     return ''
+  }
+
+  function markBroken(failure?: TokenFailure): void {
+    const e: TokenFailure = failure ?? {
+      code: 'exchange_failed',
+      detail: 'token rejected by provider (401 after refresh)',
+    }
+    enterBroken(e)
   }
 
   function getState(): AuthState {
@@ -75,5 +88,5 @@ export function createAuthStateTracker(deps: AuthStateDeps): AuthStateTracker {
     // Emits nothing
   }
 
-  return { get, state: getState, reset }
+  return { get, state: getState, reset, markBroken }
 }

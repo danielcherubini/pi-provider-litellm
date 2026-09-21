@@ -248,6 +248,60 @@ describe('createGcloudStreamSimple', () => {
     expect((events[0] as any).error.errorMessage).toBe('credential file missing')
   })
 
+  it('terminal 401 after refresh calls onTokenRejected exactly once', async () => {
+    const inner1 = createFakeStream()
+    const inner2 = createFakeStream()
+
+    getToken
+      .mockResolvedValueOnce('token-1')
+      .mockResolvedValueOnce('fresh-token') // non-empty: exchange succeeded
+
+    mockStreamSimple
+      .mockReturnValueOnce(inner1)
+      .mockReturnValueOnce(inner2)
+
+    const onTokenRejected = vi.fn()
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID, onTokenRejected)
+    const outer = streamSimple(fakeModel, fakeContext)
+
+    // First 401
+    inner1.push({ type: 'error', reason: 'error', error: { errorMessage: '401 Unauthorized' } })
+    inner1.end()
+
+    await new Promise((r) => setTimeout(r, 10))
+
+    // Second 401 from fresh token
+    inner2.push({ type: 'error', reason: 'error', error: { errorMessage: '401 Unauthorized' } })
+    inner2.end()
+
+    const events = await collectEvents(outer as any)
+
+    expect(onTokenRejected).toHaveBeenCalledTimes(1)
+    expect(events).toHaveLength(1)
+    expect((events[0] as any).type).toBe('error')
+    expect((events[0] as any).error.errorMessage).toContain(AUTH_CHAT_ERROR_LINE)
+  })
+
+  it('first-401-path (empty refresh) does NOT call onTokenRejected', async () => {
+    const inner = createFakeStream()
+    mockStreamSimple.mockReturnValue(inner)
+
+    getToken
+      .mockResolvedValueOnce('token-1')
+      .mockResolvedValueOnce('') // empty → !freshToken branch
+
+    const onTokenRejected = vi.fn()
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID, onTokenRejected)
+    const outer = streamSimple(fakeModel, fakeContext)
+
+    inner.push({ type: 'error', reason: 'error', error: { errorMessage: '401 Unauthorized' } })
+    inner.end()
+
+    await collectEvents(outer as any)
+
+    expect(onTokenRejected).not.toHaveBeenCalled()
+  })
+
   it('AUTH_CHAT_ERROR_LINE matches no pi transient-error pattern', () => {
     // KEEP IN SYNC with pi-ai dist/utils/retry.js (checked 2026-09-21)
     const RETRYABLE_PATTERNS: string[] = [

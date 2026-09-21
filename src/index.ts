@@ -46,7 +46,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // and retries with a force-refreshed token on 401 errors.
   // Pass providerId so the handler only applies gcloud logic to litellm's own models.
   const streamSimple: StreamSimpleFn | undefined = isGcloudAuth
-    ? createGcloudStreamSimple(getToken, config.providerId)
+    ? createGcloudStreamSimple(getToken, config.providerId, () => authTracker?.markBroken())
     : undefined
 
   // Track which tools have been registered to avoid duplicates across session restarts.

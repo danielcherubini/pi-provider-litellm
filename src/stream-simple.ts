@@ -52,6 +52,7 @@ export function getSessionId(): string | undefined {
 export function createGcloudStreamSimple(
   getToken: () => Promise<string>,
   providerId: string = 'litellm',
+  onTokenRejected?: () => void,
 ): StreamSimpleFn {
 
   // Cast is needed because pi-ai types are the same shape but TypeScript treats
@@ -165,6 +166,7 @@ export function createGcloudStreamSimple(
           const retryResult = await runStream(freshToken)
           if (retryResult === '401') {
             console.warn(`${LOG} Retry also got 401 — giving up`)
+            onTokenRejected?.()
             outerStream.push({ type: 'error', reason: 'error', error: makeError(AUTH_CHAT_ERROR_LINE) })
             outerStream.end()
           }

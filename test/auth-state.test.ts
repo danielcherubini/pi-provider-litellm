@@ -210,6 +210,62 @@ describe('createAuthStateTracker', () => {
 })
 
 // ---------------------------------------------------------------------------
+// markBroken
+// ---------------------------------------------------------------------------
+
+describe('markBroken', () => {
+  it('emits once from unknown', () => {
+    const deps = makeDeps()
+    const tracker = createAuthStateTracker(deps)
+
+    tracker.markBroken()
+
+    expect(deps.emitFailed).toHaveBeenCalledTimes(1)
+    expect(deps.emitFailed).toHaveBeenCalledWith({
+      code: 'exchange_failed',
+      detail: 'token rejected by provider (401 after refresh)',
+    })
+    expect(tracker.state()).toBe('broken')
+    expect(deps.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('suppresses while broken', () => {
+    const deps = makeDeps()
+    const tracker = createAuthStateTracker(deps)
+
+    tracker.markBroken()
+    tracker.markBroken() // second call — suppressed
+
+    expect(deps.emitFailed).toHaveBeenCalledTimes(1)
+    expect(deps.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-arms after recovery', async () => {
+    const deps = makeDeps({
+      getToken: async () => 'tok',
+      getFailure: () => null,
+    })
+    const tracker = createAuthStateTracker(deps)
+
+    tracker.markBroken() // broken (emitFailed: 1)
+    await tracker.get()  // recovery via valid token → valid (emitRecovered: 1)
+    tracker.markBroken() // broken again (emitFailed: 2)
+
+    expect(deps.emitFailed).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses explicit failure when provided', () => {
+    const deps = makeDeps()
+    const tracker = createAuthStateTracker(deps)
+    const explicit: TokenFailure = { code: 'invalid_grant', detail: 'x' }
+
+    tracker.markBroken(explicit)
+
+    expect(deps.emitFailed).toHaveBeenCalledWith(explicit)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // AUTH_CHAT_ERROR_LINE constant
 // ---------------------------------------------------------------------------
 
