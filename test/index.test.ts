@@ -41,6 +41,7 @@ function makeFakeCtx(overrides: Partial<ExtensionContext> = {}): ExtensionContex
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
+      setWidget: vi.fn(),
       theme: { fg: (_c: string, t: string) => t },
     },
     sessionManager: {
@@ -389,7 +390,7 @@ describe('bridge: auth event → UI notifications', () => {
     expect(failedHandlers.length).toBeGreaterThan(0)
     await failedHandlers[0]?.({ code: 'invalid_grant', detail: 'HTTP 400: invalid_grant' })
 
-    const ui = fakeCtx.ui as { notify: ReturnType<typeof vi.fn>; setStatus: ReturnType<typeof vi.fn> }
+    const ui = fakeCtx.ui as { notify: ReturnType<typeof vi.fn>; setStatus: ReturnType<typeof vi.fn>; setWidget: ReturnType<typeof vi.fn> }
     expect(ui.notify).toHaveBeenCalledTimes(1)
     expect(ui.notify).toHaveBeenCalledWith(
       AUTH_TOAST_LINE,
@@ -399,6 +400,12 @@ describe('bridge: auth event → UI notifications', () => {
     expect(ui.setStatus).toHaveBeenCalledWith(
       'litellm',
       AUTH_STATUS_LINE
+    )
+    expect(ui.setWidget).toHaveBeenCalledTimes(1)
+    expect(ui.setWidget).toHaveBeenCalledWith(
+      'litellm',
+      [AUTH_STATUS_LINE],
+      { placement: 'aboveEditor' }
     )
   })
 
@@ -415,9 +422,11 @@ describe('bridge: auth event → UI notifications', () => {
     expect(recoveredHandlers.length).toBeGreaterThan(0)
     await recoveredHandlers[0]?.(undefined)
 
-    const ui = fakeCtx.ui as { notify: ReturnType<typeof vi.fn>; setStatus: ReturnType<typeof vi.fn> }
+    const ui = fakeCtx.ui as { notify: ReturnType<typeof vi.fn>; setStatus: ReturnType<typeof vi.fn>; setWidget: ReturnType<typeof vi.fn> }
     expect(ui.setStatus).toHaveBeenCalledTimes(1)
     expect(ui.setStatus).toHaveBeenCalledWith('litellm', undefined)
+    expect(ui.setWidget).toHaveBeenCalledTimes(1)
+    expect(ui.setWidget).toHaveBeenCalledWith('litellm', undefined)
     expect(ui.notify).toHaveBeenCalledTimes(1)
     expect(ui.notify).toHaveBeenCalledWith('litellm: token recovered', 'info')
   })
@@ -456,5 +465,50 @@ describe('bridge: auth event → UI notifications', () => {
     )
     expect(channels).not.toContain('litellm:auth_failed')
     expect(channels).not.toContain('litellm:auth_recovered')
+  })
+
+  it('bridge: session_start re-fires UI when token is already broken', async () => {
+    // Configure gcloud token mock: token is empty → broken state at startup
+    const mockGetGcloudToken = vi.fn().mockResolvedValue('')
+    const mockGetLastTokenFailure = vi.fn().mockReturnValue({ code: 'invalid_grant', detail: 'HTTP 400: invalid_grant' })
+    vi.doMock('../src/gcloud-token.js', () => ({
+      getGcloudToken: mockGetGcloudToken,
+      resetTokenCache: vi.fn(),
+      getLastTokenFailure: mockGetLastTokenFailure,
+    }))
+
+    const mod = await import('../src/index.js')
+    const mockPi = createMockPi()
+    await mod.default(mockPi as unknown as ExtensionAPI)
+
+    // The authTracker.get() is called during startup (syncRemoteSkills → getToken → authTracker.get())
+    // which transitions state to 'broken' and emits 'litellm:auth_failed' via pi.events.emit.
+    // Since there's no currentCtx yet, no UI ops should have happened.
+    // Verify emit was called with auth_failed
+    expect(mockPi.events.emit).toHaveBeenCalledWith('litellm:auth_failed', expect.anything())
+
+    // No UI ops yet — no session_start has fired
+    // Now invoke session_start with a fresh ctx
+    const fakeCtx = makeFakeCtx()
+    const sessionStartHandler = mockPi.handlers['session_start']?.[0]
+    await sessionStartHandler?.({}, fakeCtx)
+
+    const ui = fakeCtx.ui as {
+      notify: ReturnType<typeof vi.fn>
+      setStatus: ReturnType<typeof vi.fn>
+      setWidget: ReturnType<typeof vi.fn>
+    }
+
+    // session_start should re-fire the auth broken UI
+    expect(ui.notify).toHaveBeenCalledTimes(1)
+    expect(ui.notify).toHaveBeenCalledWith(AUTH_TOAST_LINE, 'error')
+    expect(ui.setStatus).toHaveBeenCalledTimes(1)
+    expect(ui.setStatus).toHaveBeenCalledWith('litellm', AUTH_STATUS_LINE)
+    expect(ui.setWidget).toHaveBeenCalledTimes(1)
+    expect(ui.setWidget).toHaveBeenCalledWith(
+      'litellm',
+      [AUTH_STATUS_LINE],
+      { placement: 'aboveEditor' }
+    )
   })
 })

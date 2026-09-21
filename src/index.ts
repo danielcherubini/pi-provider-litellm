@@ -74,23 +74,32 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // Initial MCP tool and skills discovery
   await discoverAndRegisterTools(pi, config, getToken, registeredTools, skillsEnabled)
 
+  const showAuthBroken = (target: ExtensionContext | undefined) => {
+    if (!target?.hasUI) return
+    target.ui.notify(AUTH_TOAST_LINE, 'error')
+    const themedStatus = target.ui.theme.fg('error', AUTH_STATUS_LINE)
+    target.ui.setStatus('litellm', themedStatus)
+    target.ui.setWidget('litellm', [themedStatus], { placement: 'aboveEditor' })
+  }
+  const showAuthRecovered = (target: ExtensionContext | undefined) => {
+    if (!target?.hasUI) return
+    target.ui.setStatus('litellm', undefined)
+    target.ui.setWidget('litellm', undefined)
+    target.ui.notify('litellm: token recovered', 'info')
+  }
+
   if (authTracker) {
     pi.events.on('litellm:auth_failed', () => {
-      const ctx = currentCtx
-      if (!ctx?.hasUI) return
-      ctx.ui.notify(AUTH_TOAST_LINE, 'error')
-      ctx.ui.setStatus('litellm', ctx.ui.theme.fg('error', AUTH_STATUS_LINE))
+      showAuthBroken(currentCtx)
     })
     pi.events.on('litellm:auth_recovered', () => {
-      const ctx = currentCtx
-      if (!ctx?.hasUI) return
-      ctx.ui.setStatus('litellm', undefined)
-      ctx.ui.notify('litellm: token recovered', 'info')
+      showAuthRecovered(currentCtx)
     })
   }
 
   pi.on('session_start', async (_event, ctx) => {
     currentCtx = ctx
+    if (authTracker && authTracker.state() === 'broken') showAuthBroken(ctx)
     // Assign a stable session ID so all requests in this pi session are grouped
     // under one conversation in the LiteLLM logs — mirroring Claude Code behaviour.
     setSessionId(ctx.sessionManager.getSessionId() ?? crypto.randomUUID())
