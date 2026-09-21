@@ -8,6 +8,14 @@ let cachedAt: number = 0
 let inflight: Promise<string | null> | null = null
 export const CACHE_TTL = 50 * 60 * 1000 // 50 minutes in ms
 
+export type TokenFailureCode = 'invalid_grant' | 'exchange_failed' | 'bad_credentials'
+export interface TokenFailure { code: TokenFailureCode; detail: string }
+
+let lastTokenFailure: TokenFailure | null = null
+export function getLastTokenFailure(): TokenFailure | null {
+  return lastTokenFailure
+}
+
 interface AuthorizedUserCredentials {
   type: 'authorized_user'
   client_id: string
@@ -83,14 +91,15 @@ async function exchangeRefreshToken(credentials: AuthorizedUserCredentials): Pro
 
     if (!response.ok) {
       const text = await response.text()
-      console.warn(`${LOG} Token exchange failed (${response.status}): ${text}`)
+      const code: TokenFailureCode = text.includes('invalid_grant') ? 'invalid_grant' : 'exchange_failed'
+      lastTokenFailure = { code, detail: `HTTP ${response.status}: ${text}` }
       return null
     }
 
-    const data = await response.json()
-    return data.access_token || null
+    const data = (await response.json()) as { access_token?: string }
+    return data.access_token ?? null
   } catch (error) {
-    console.warn(`${LOG} Token exchange failed: ${error}`)
+    lastTokenFailure = { code: 'exchange_failed', detail: `Network error: ${error}` }
     return null
   }
 }
@@ -99,7 +108,7 @@ async function exchangeRefreshToken(credentials: AuthorizedUserCredentials): Pro
  * Gets a Google OAuth access token from the ADC JSON file, cached with a 50-minute TTL.
  * Concurrent calls share one in-flight request (request coalescing).
  * Returns null if credentials are not available or the token cannot be fetched.
- * Logs a warning on failure.
+ * Records the classified failure (queryable via `getLastTokenFailure()`) on failure; does not log — warn ownership lives in `auth-state.ts`.
  */
 export async function getGcloudToken(): Promise<string | null> {
   // Return cached token if still valid
@@ -116,21 +125,23 @@ export async function getGcloudToken(): Promise<string | null> {
     try {
       const adcPath = getAdcPath()
       if (!adcPath) {
-        console.warn(
-          `${LOG} No Google ADC file found. Set GOOGLE_APPLICATION_CREDENTIALS or run \`gcloud auth application-default login\`.`,
-        )
+        lastTokenFailure = {
+          code: 'bad_credentials',
+          detail: 'No Google ADC file found (set GOOGLE_APPLICATION_CREDENTIALS or run gcloud auth application-default login)',
+        }
         return null
       }
 
       const credentials = readCredentials(adcPath)
       if (!credentials) {
-        console.warn(`${LOG} Failed to read ADC file: ${adcPath}`)
+        lastTokenFailure = { code: 'bad_credentials', detail: `Failed to read ADC file: ${adcPath}` }
         return null
       }
 
       if (credentials.type === 'authorized_user') {
         const token = await exchangeRefreshToken(credentials)
         if (token) {
+          lastTokenFailure = null
           cachedToken = token
           cachedAt = Date.now()
         }
@@ -138,12 +149,14 @@ export async function getGcloudToken(): Promise<string | null> {
       }
 
       if (credentials.type === 'service_account') {
-        console.warn(`${LOG} Service account credentials are not yet supported. Use an authorized_user credential or set GOOGLE_APPLICATION_CREDENTIALS to an authorized_user JSON file.`)
+        lastTokenFailure = {
+          code: 'bad_credentials',
+          detail: 'Service account credentials are not yet supported (need authorized_user)',
+        }
         return null
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-      console.warn(`${LOG} Unknown credential type: ${(credentials as { type: string }).type}`)
+      lastTokenFailure = { code: 'bad_credentials', detail: 'Unknown credential type' }
       return null
     } finally {
       inflight = null
@@ -160,4 +173,5 @@ export function resetTokenCache(): void {
   cachedToken = null
   cachedAt = 0
   inflight = null
+  lastTokenFailure = null
 }

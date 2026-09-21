@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { getGcloudToken, resetTokenCache, CACHE_TTL } from '../src/gcloud-token.js'
+import { getGcloudToken, resetTokenCache, CACHE_TTL, getLastTokenFailure } from '../src/gcloud-token.js'
 
 const mockReadFileSync = vi.hoisted(() => vi.fn())
 const mockExistsSync = vi.hoisted(() => vi.fn())
@@ -94,7 +94,8 @@ describe('getGcloudToken', () => {
 
     const token = await getGcloudToken()
     expect(token).toBeNull()
-    expect(warnSpy).toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(getLastTokenFailure()).toMatchObject({ code: 'bad_credentials' })
 
     warnSpy.mockRestore()
   })
@@ -109,12 +110,13 @@ describe('getGcloudToken', () => {
 
     const token = await getGcloudToken()
     expect(token).toBeNull()
-    expect(warnSpy).toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(getLastTokenFailure()).toMatchObject({ code: 'bad_credentials' })
 
     warnSpy.mockRestore()
   })
 
-  it('returns null and warns for service_account type', async () => {
+  it('returns null for service_account type', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
@@ -124,14 +126,13 @@ describe('getGcloudToken', () => {
 
     const token = await getGcloudToken()
     expect(token).toBeNull()
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[pi-provider-litellm] Service account credentials are not yet supported. Use an authorized_user credential or set GOOGLE_APPLICATION_CREDENTIALS to an authorized_user JSON file.',
-    )
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(getLastTokenFailure()).toMatchObject({ code: 'bad_credentials' })
 
     warnSpy.mockRestore()
   })
 
-  it('returns null on token exchange failure', async () => {
+  it('returns null on token exchange failure (invalid_grant)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
@@ -146,7 +147,8 @@ describe('getGcloudToken', () => {
 
     const token = await getGcloudToken()
     expect(token).toBeNull()
-    expect(warnSpy).toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(getLastTokenFailure()).toMatchObject({ code: 'invalid_grant' })
 
     warnSpy.mockRestore()
   })
@@ -162,9 +164,52 @@ describe('getGcloudToken', () => {
 
     const token = await getGcloudToken()
     expect(token).toBeNull()
-    expect(warnSpy).toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(getLastTokenFailure()).toMatchObject({ code: 'exchange_failed' })
 
     warnSpy.mockRestore()
+  })
+
+  it('clears the failure sink after a successful token exchange', async () => {
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
+
+    // First: cause a failure
+    mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: async () => '{"error":"invalid_grant"}',
+    })
+    await getGcloudToken()
+    expect(getLastTokenFailure()).not.toBeNull()
+
+    // Now: successful exchange (cache was reset by previous afterEach would not fire yet)
+    resetTokenCache()
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ access_token: 'fresh-token' }),
+    })
+    const token = await getGcloudToken()
+    expect(token).toBe('fresh-token')
+    expect(getLastTokenFailure()).toBeNull()
+  })
+
+  it('resetTokenCache clears the failure sink', async () => {
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
+
+    mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: async () => '{"error":"invalid_grant"}',
+    })
+    await getGcloudToken()
+    expect(getLastTokenFailure()).not.toBeNull()
+
+    resetTokenCache()
+    expect(getLastTokenFailure()).toBeNull()
   })
 
   it('reads default ADC location when GOOGLE_APPLICATION_CREDENTIALS is not set', async () => {

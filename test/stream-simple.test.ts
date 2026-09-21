@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { AUTH_CHAT_ERROR_LINE } from '../src/auth-state.js'
 
 // --- helpers ----------------------------------------------------------------
 
@@ -201,7 +202,7 @@ describe('createGcloudStreamSimple', () => {
     const events = await collectEvents(outer as any)
     expect(events).toHaveLength(1)
     expect((events[0] as any).type).toBe('error')
-    expect((events[0] as any).error.errorMessage).toContain('Failed to refresh gcloud token')
+    expect((events[0] as any).error.errorMessage).toContain(AUTH_CHAT_ERROR_LINE)
   })
 
   it('emits error when retry also gets 401', async () => {
@@ -232,7 +233,7 @@ describe('createGcloudStreamSimple', () => {
     const events = await collectEvents(outer as any)
     expect(events).toHaveLength(1)
     expect((events[0] as any).type).toBe('error')
-    expect((events[0] as any).error.errorMessage).toContain('Authentication failed after token refresh')
+    expect((events[0] as any).error.errorMessage).toContain(AUTH_CHAT_ERROR_LINE)
   })
 
   it('emits error when getToken throws', async () => {
@@ -245,5 +246,117 @@ describe('createGcloudStreamSimple', () => {
     expect(events).toHaveLength(1)
     expect((events[0] as any).type).toBe('error')
     expect((events[0] as any).error.errorMessage).toBe('credential file missing')
+  })
+
+  it('terminal 401 after refresh calls onTokenRejected exactly once', async () => {
+    const inner1 = createFakeStream()
+    const inner2 = createFakeStream()
+
+    getToken
+      .mockResolvedValueOnce('token-1')
+      .mockResolvedValueOnce('fresh-token') // non-empty: exchange succeeded
+
+    mockStreamSimple
+      .mockReturnValueOnce(inner1)
+      .mockReturnValueOnce(inner2)
+
+    const onTokenRejected = vi.fn()
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID, onTokenRejected)
+    const outer = streamSimple(fakeModel, fakeContext)
+
+    // First 401
+    inner1.push({ type: 'error', reason: 'error', error: { errorMessage: '401 Unauthorized' } })
+    inner1.end()
+
+    await new Promise((r) => setTimeout(r, 10))
+
+    // Second 401 from fresh token
+    inner2.push({ type: 'error', reason: 'error', error: { errorMessage: '401 Unauthorized' } })
+    inner2.end()
+
+    const events = await collectEvents(outer as any)
+
+    expect(onTokenRejected).toHaveBeenCalledTimes(1)
+    expect(events).toHaveLength(1)
+    expect((events[0] as any).type).toBe('error')
+    expect((events[0] as any).error.errorMessage).toContain(AUTH_CHAT_ERROR_LINE)
+  })
+
+  it('first-401-path (empty refresh) does NOT call onTokenRejected', async () => {
+    const inner = createFakeStream()
+    mockStreamSimple.mockReturnValue(inner)
+
+    getToken
+      .mockResolvedValueOnce('token-1')
+      .mockResolvedValueOnce('') // empty → !freshToken branch
+
+    const onTokenRejected = vi.fn()
+    const streamSimple = createGcloudStreamSimple(getToken, PROVIDER_ID, onTokenRejected)
+    const outer = streamSimple(fakeModel, fakeContext)
+
+    inner.push({ type: 'error', reason: 'error', error: { errorMessage: '401 Unauthorized' } })
+    inner.end()
+
+    await collectEvents(outer as any)
+
+    expect(onTokenRejected).not.toHaveBeenCalled()
+  })
+
+  it('AUTH_CHAT_ERROR_LINE matches no pi transient-error pattern', () => {
+    // KEEP IN SYNC with pi-ai dist/utils/retry.js (checked 2026-09-21)
+    const RETRYABLE_PATTERNS: string[] = [
+      'overloaded',
+      'currently experiencing high demand',
+      'rate.?limit',
+      'too many requests',
+      '429',
+      '500',
+      '502',
+      '503',
+      '504',
+      '520',
+      '524',
+      'service.?unavailable',
+      'server.?error',
+      'internal.?error',
+      'Provider returned error',
+      'provider.?returned.?error',
+      'exceeded request buffer limit while retrying upstream',
+      'upstream connect',
+      'connection refused',
+      'reset before headers',
+      'network.?error',
+      'connection.?error',
+      'connection.?refused',
+      'connection.?lost',
+      'other side closed',
+      'fetch failed',
+      'getaddrinfo',
+      'ENOTFOUND',
+      'EAI_AGAIN',
+      'upstream.?connect',
+      'reset before headers',
+      'socket hang up',
+      'socket connection was closed',
+      'timed? out',
+      'timeout',
+      'terminated',
+      'websocket.?closed',
+      'websocket.?error',
+      'stream ended without ...',
+      'Anthropic stream ended before message_stop',
+      'ended without',
+      'stream ended before message_stop',
+      'stream ended before a terminal response event',
+      'http2 request did not get a response',
+      'retry delay',
+      'you can retry your request',
+      'try your request again',
+      'please retry your request',
+      'ResourceExhausted',
+    ]
+    for (const p of RETRYABLE_PATTERNS) {
+      expect(new RegExp(p, 'i').test(AUTH_CHAT_ERROR_LINE)).toBe(false)
+    }
   })
 })

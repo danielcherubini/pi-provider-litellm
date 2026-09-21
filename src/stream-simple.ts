@@ -8,15 +8,16 @@ import { streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/compat'
 import {
   createAssistantMessageEventStream,
   type AssistantMessageEventStream,
-  type Context,
   type Model,
   type Api,
   type SimpleStreamOptions,
   type TextContent,
   type ThinkingContent,
   type ToolCall,
+  type TranscriptContext,
 } from '@earendil-works/pi-ai'
 import { resetTokenCache } from './gcloud-token.js'
+import { AUTH_CHAT_ERROR_LINE } from './auth-state.js'
 import type { StreamSimpleFn } from './types.js'
 
 const LOG = '[pi-provider-litellm]'
@@ -51,13 +52,14 @@ export function getSessionId(): string | undefined {
 export function createGcloudStreamSimple(
   getToken: () => Promise<string>,
   providerId: string = 'litellm',
+  onTokenRejected?: () => void,
 ): StreamSimpleFn {
 
   // Cast is needed because pi-ai types are the same shape but TypeScript treats
   // the devDep copy and the runtime copy as distinct due to private members.
   return (function gcloudStreamSimple(
     model: Model<Api>,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream {
     // Only apply gcloud token refresh logic for this provider's models.
@@ -154,7 +156,7 @@ export function createGcloudStreamSimple(
 
           if (!freshToken) {
             console.warn(`${LOG} Failed to get fresh token after 401`)
-            outerStream.push({ type: 'error', reason: 'error', error: makeError('Failed to refresh gcloud token after 401') })
+            outerStream.push({ type: 'error', reason: 'error', error: makeError(AUTH_CHAT_ERROR_LINE) })
             outerStream.end()
             return
           }
@@ -164,7 +166,8 @@ export function createGcloudStreamSimple(
           const retryResult = await runStream(freshToken)
           if (retryResult === '401') {
             console.warn(`${LOG} Retry also got 401 — giving up`)
-            outerStream.push({ type: 'error', reason: 'error', error: makeError('Authentication failed after token refresh (401 Unauthorized)') })
+            onTokenRejected?.()
+            outerStream.push({ type: 'error', reason: 'error', error: makeError(AUTH_CHAT_ERROR_LINE) })
             outerStream.end()
           }
         }
