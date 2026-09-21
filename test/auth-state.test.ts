@@ -169,6 +169,31 @@ describe('createAuthStateTracker', () => {
     expect(deps.warn).toHaveBeenCalledTimes(2)
   })
 
+  // 9. concurrent sink clear falls back to exchange_failed (accepted behavior)
+  it('concurrent sink clear falls back to exchange_failed', async () => {
+    // Accepted behavior: a concurrent resetTokenCache() (the 401 path in
+    // stream-simple.ts) can clear lastTokenFailure to null between the token
+    // read (await deps.getToken()) and the failure read (deps.getFailure()).
+    // When getFailure() returns null, get() falls back to
+    // { code: 'exchange_failed', detail: 'token fetch returned empty' }.
+    // The event still fires exactly once per transition — the fallback is intentional.
+    const deps = makeDeps({
+      getToken: async () => null,
+      // First call (the one get() actually uses) returns null — simulating the
+      // race where resetTokenCache() cleared the sink before get() reads it.
+      getFailure: vi.fn().mockReturnValueOnce(null).mockReturnValue(SAMPLE_FAILURE),
+    })
+    const tracker = createAuthStateTracker(deps)
+
+    await tracker.get()
+
+    expect(deps.emitFailed).toHaveBeenCalledTimes(1)
+    expect(deps.emitFailed).toHaveBeenCalledWith({
+      code: 'exchange_failed',
+      detail: 'token fetch returned empty',
+    })
+  })
+
   // 8. get() returns '' (never undefined) on failure
   it("get() returns '' on failure, never undefined", async () => {
     const deps = makeDeps({

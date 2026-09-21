@@ -26,6 +26,13 @@ export interface AuthStateTracker {
 export const AUTH_CHAT_ERROR_LINE =
   'litellm: Google token invalid \u2014 re-auth required: gcloud auth application-default login'
 
+// Centralized wording for the toast notification and footer status shown when
+// a gcloud token failure is surfaced to the UI. Kept here so a wording change
+// only requires editing one file (these strings do NOT go through pi's retry
+// classifier, so no knob-warning needed).
+export const AUTH_TOAST_LINE = 'litellm: token invalid \u2014 run: gcloud auth application-default login'
+export const AUTH_STATUS_LINE = '⚠ litellm token invalid \u2014 re-auth required'
+
 export function createAuthStateTracker(deps: AuthStateDeps): AuthStateTracker {
   let state: AuthState = 'unknown'
 

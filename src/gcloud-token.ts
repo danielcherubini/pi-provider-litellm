@@ -96,8 +96,8 @@ async function exchangeRefreshToken(credentials: AuthorizedUserCredentials): Pro
       return null
     }
 
-    const data = await response.json()
-    return data.access_token || null
+    const data = (await response.json()) as { access_token?: string }
+    return data.access_token ?? null
   } catch (error) {
     lastTokenFailure = { code: 'exchange_failed', detail: `Network error: ${error}` }
     return null
@@ -108,7 +108,7 @@ async function exchangeRefreshToken(credentials: AuthorizedUserCredentials): Pro
  * Gets a Google OAuth access token from the ADC JSON file, cached with a 50-minute TTL.
  * Concurrent calls share one in-flight request (request coalescing).
  * Returns null if credentials are not available or the token cannot be fetched.
- * Logs a warning on failure.
+ * Records the classified failure (queryable via `getLastTokenFailure()`) on failure; does not log — warn ownership lives in `auth-state.ts`.
  */
 export async function getGcloudToken(): Promise<string | null> {
   // Return cached token if still valid

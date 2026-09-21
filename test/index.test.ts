@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { PluginConfig } from '../src/types.js'
+import { AUTH_TOAST_LINE, AUTH_STATUS_LINE } from '../src/auth-state.js'
 
 const mockConfig: PluginConfig = { url: 'http://localhost:4000', apiKey: 'test-key', providerId: 'litellm' }
 const mockGetToken = () => Promise.resolve('test-key')
@@ -391,13 +392,13 @@ describe('bridge: auth event → UI notifications', () => {
     const ui = fakeCtx.ui as { notify: ReturnType<typeof vi.fn>; setStatus: ReturnType<typeof vi.fn> }
     expect(ui.notify).toHaveBeenCalledTimes(1)
     expect(ui.notify).toHaveBeenCalledWith(
-      'litellm: token invalid — run: gcloud auth application-default login',
+      AUTH_TOAST_LINE,
       'error'
     )
     expect(ui.setStatus).toHaveBeenCalledTimes(1)
     expect(ui.setStatus).toHaveBeenCalledWith(
       'litellm',
-      '⚠ litellm token invalid — re-auth required'
+      AUTH_STATUS_LINE
     )
   })
 

@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { resolvePluginConfig, discoverMcpTools, buildNativeProvider, readSkillsSetting, writeSkillsSetting } from './litellm-api.js'
 import { createMcpToolDefinitions, createSkillToolDefinitions } from './tools.js'
 import { getGcloudToken, getLastTokenFailure } from './gcloud-token.js'
-import { createAuthStateTracker } from './auth-state.js'
+import { createAuthStateTracker, AUTH_TOAST_LINE, AUTH_STATUS_LINE } from './auth-state.js'
 import { createGcloudStreamSimple, setSessionId } from './stream-simple.js'
 import type { McpTool, PluginConfig, StreamSimpleFn } from './types.js'
 import { syncRemoteSkills, clearSkillsCache, getCachedSkillNames, getCacheAgeMinutes } from './skills-cache.js'
@@ -75,11 +75,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   await discoverAndRegisterTools(pi, config, getToken, registeredTools, skillsEnabled)
 
   if (authTracker) {
-    pi.events.on('litellm:auth_failed', (data) => {
+    pi.events.on('litellm:auth_failed', () => {
       const ctx = currentCtx
       if (!ctx?.hasUI) return
-      ctx.ui.notify('litellm: token invalid — run: gcloud auth application-default login', 'error')
-      ctx.ui.setStatus('litellm', ctx.ui.theme.fg('error', '⚠ litellm token invalid — re-auth required'))
+      ctx.ui.notify(AUTH_TOAST_LINE, 'error')
+      ctx.ui.setStatus('litellm', ctx.ui.theme.fg('error', AUTH_STATUS_LINE))
     })
     pi.events.on('litellm:auth_recovered', () => {
       const ctx = currentCtx
