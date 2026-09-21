@@ -8,13 +8,13 @@ import { streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/compat'
 import {
   createAssistantMessageEventStream,
   type AssistantMessageEventStream,
-  type Context,
   type Model,
   type Api,
   type SimpleStreamOptions,
   type TextContent,
   type ThinkingContent,
   type ToolCall,
+  type TranscriptContext,
 } from '@earendil-works/pi-ai'
 import { resetTokenCache } from './gcloud-token.js'
 import type { StreamSimpleFn } from './types.js'
@@ -57,7 +57,7 @@ export function createGcloudStreamSimple(
   // the devDep copy and the runtime copy as distinct due to private members.
   return (function gcloudStreamSimple(
     model: Model<Api>,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream {
     // Only apply gcloud token refresh logic for this provider's models.
